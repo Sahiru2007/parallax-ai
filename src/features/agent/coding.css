@@ -1,0 +1,295 @@
+.coding-workspace {
+  min-height: 100vh;
+  height: auto;
+  color: var(--cut-text, #ded8c4);
+  background: #191b18;
+}
+.coding-topbar {
+  display: flex;
+  gap: 22px;
+  padding: 14px 24px;
+  border-bottom: 1px solid #383b30;
+  flex-wrap: wrap;
+}
+.coding-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.coding-logo svg {
+  width: 28px;
+  height: 28px;
+}
+.coding-connection {
+  margin-left: auto;
+}
+.coding-workspace a {
+  color: #ddbe81;
+}
+.coding-workspace button,
+.coding-workspace select {
+  cursor: pointer;
+  border: 1px solid #50543d;
+  border-radius: 4px;
+  background: #272b22;
+  color: #d9d4bf;
+  padding: 8px 12px;
+}
+.coding-workspace button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.coding-workspace .cut-primary {
+  background: #ddbe81;
+  color: #272a20;
+  text-decoration: none;
+  padding: 10px 14px;
+  border-radius: 4px;
+}
+.coding-navigation {
+  display: flex;
+  gap: 12px;
+  padding: 12px 24px;
+}
+.coding-navigation select {
+  max-width: 65vw;
+}
+.coding-entry {
+  max-width: 960px;
+  margin: 7vh auto;
+  padding: 24px;
+}
+.coding-entry h1 {
+  font-size: 36px;
+}
+.coding-entry > p {
+  margin: 16px 0 24px;
+  color: #a1a38d;
+}
+.coding-entry .cut-use-sample {
+  margin-top: 30px;
+  display: flex;
+  gap: 16px;
+}
+.coding-repo-form {
+  display: flex;
+  gap: 10px;
+}
+.coding-workspace input:not([type='checkbox']) {
+  background: #161913;
+  border: 1px solid #50543d;
+  border-radius: 4px;
+  color: #e4dfcc;
+  padding: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.coding-baseline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin: 18px 0;
+  color: #a6ab8f;
+  font-size: 12px;
+}
+.coding-baseline code {
+  overflow-wrap: anywhere;
+}
+.coding-composer {
+  width: 100%;
+}
+.coding-workspace .cut-composer {
+  padding: 16px;
+}
+.coding-workspace textarea {
+  width: 100%;
+  min-height: 100px;
+  background: transparent;
+  color: #eee6ce;
+  resize: vertical;
+  border: 0;
+  padding: 8px;
+}
+.coding-workspace .cut-composer-actions {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.coding-workspace label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.coding-session {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.2fr);
+  gap: 1px;
+  background: #383b30;
+  border-top: 1px solid #383b30;
+}
+.coding-conversation,
+.coding-review {
+  min-width: 0;
+  padding: 22px;
+  background: #1d201a;
+}
+.coding-session-header h1 {
+  font-size: 20px;
+  line-height: 1.5;
+}
+.coding-session-header span {
+  color: #ddbe81;
+  font-size: 11px;
+}
+.coding-session-header p,
+.coding-session-header small {
+  display: block;
+  margin: 10px 0;
+  color: #a1a68c;
+  overflow-wrap: anywhere;
+}
+.coding-session-header code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.coding-transcript {
+  height: 42vh;
+  min-height: 250px;
+  overflow: auto;
+  margin: 20px 0;
+}
+.coding-transcript details {
+  display: block;
+  padding: 10px;
+  border-bottom: 1px solid #363b2e;
+  font-size: 12px;
+}
+.coding-transcript pre,
+.coding-approval pre,
+.coding-checks pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  max-height: 360px;
+  overflow: auto;
+}
+.coding-message {
+  padding: 12px;
+  background: #262c20;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.coding-approval {
+  border: 1px solid #b1945c;
+  padding: 16px;
+  background: #333222;
+  margin: 14px 0;
+}
+.coding-approval button {
+  margin-right: 10px;
+}
+.coding-review-header,
+.coding-candidates {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.coding-review h2 {
+  font-size: 16px;
+}
+.coding-candidates {
+  justify-content: start;
+}
+.coding-file-review {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.35fr) minmax(0, 1fr);
+  min-height: 350px;
+  border: 1px solid #3e4433;
+}
+.coding-file-review nav {
+  padding: 8px;
+  border-right: 1px solid #3e4433;
+}
+.coding-file-review nav button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+.coding-file-review [aria-pressed='true'] {
+  border-color: #ddbe81;
+}
+.coding-file-review h3 {
+  padding: 12px;
+  border-bottom: 1px solid #3e4433;
+  font-size: 13px;
+}
+.coding-diff {
+  max-height: 55vh;
+  min-height: 300px;
+  overflow: auto;
+  white-space: pre;
+  padding: 14px;
+  font:
+    11px/1.8 'JetBrains Mono',
+    monospace;
+}
+.coding-checks {
+  margin: 24px 0;
+}
+.coding-checks details {
+  margin: 12px 0;
+  padding: 12px;
+  background: #242a1e;
+  border: 1px solid #3e4433;
+}
+.coding-checks strong {
+  color: #ddbe81;
+}
+.coding-apply {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+.coding-apply label {
+  width: 100%;
+  flex-wrap: wrap;
+}
+.coding-apply p {
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #a9ad95;
+}
+@media (max-width: 900px) {
+  .coding-session {
+    grid-template-columns: 1fr;
+  }
+  .coding-entry {
+    margin-top: 20px;
+  }
+  .coding-file-review {
+    grid-template-columns: 1fr;
+  }
+  .coding-file-review nav {
+    border-right: 0;
+    border-bottom: 1px solid #3e4433;
+  }
+  .coding-workspace .cut-topbar {
+    height: auto;
+  }
+  .coding-navigation {
+    flex-wrap: wrap;
+  }
+  .coding-repo-form {
+    flex-wrap: wrap;
+  }
+  .coding-review,
+  .coding-conversation {
+    padding: 14px;
+  }
+}

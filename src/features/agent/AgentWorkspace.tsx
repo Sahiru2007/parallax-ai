@@ -128,7 +128,9 @@ function Composer({
   onSubmit: (task: string, mode: 'sample' | 'live') => Promise<unknown>
   busy?: boolean
 }) {
-  const [task, setTask] = useState('')
+  const [task, setTask] = useState(
+    docked ? '' : window.location.pathname.startsWith('/pickup') ? SAMPLE_TASK : '',
+  )
   const [mode, setMode] = useState<'sample' | 'live'>('sample')
   const [sending, setSending] = useState(false)
   async function submit() {
@@ -429,6 +431,12 @@ export default function AgentWorkspace() {
   const readyToReplay =
     Boolean(session?.candidates.every((candidate) => candidate.ready)) && !session?.busy
   const scheduleChanged = Boolean(session && order.join() !== session.selectedSchedule.join())
+  const stale = Boolean(
+    displayed &&
+    (scheduleChanged ||
+      displayed.attemptId !== session?.attemptId ||
+      displayed.schedule.join() !== order.join()),
+  )
   async function copyOrder() {
     await navigator.clipboard.writeText(JSON.stringify(order))
     setCopied(true)
@@ -601,6 +609,22 @@ export default function AgentWorkspace() {
                       Cancel
                     </button>
                   )}
+                  {!session.busy &&
+                    (session.status === 'error' ||
+                      session.status === 'cancelled' ||
+                      session.cleanedAt) && (
+                      <button onClick={() => void api.retry()} aria-label="Retry investigation">
+                        Retry
+                      </button>
+                    )}
+                  {!session.busy && !session.cleanedAt && (
+                    <button
+                      onClick={() => void api.cleanup()}
+                      aria-label="Clean up candidate worktrees"
+                    >
+                      Clean up
+                    </button>
+                  )}
                 </div>
                 <Composer
                   config={api.config}
@@ -654,7 +678,15 @@ export default function AgentWorkspace() {
                         {candidate.name}
                         <small>{candidate.strategy}</small>
                       </span>
-                      <StatePill run={currentRuns[index]} />
+                      {scheduleChanged ||
+                      (currentRuns[index] &&
+                        currentRuns[index]?.attemptId !== session.attemptId) ? (
+                        <span className="cut-state-pill" aria-label="Stale result">
+                          STALE
+                        </span>
+                      ) : (
+                        <StatePill run={currentRuns[index]} />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -712,7 +744,13 @@ export default function AgentWorkspace() {
                         ? `${names[displayed.version]} · ${selectedEvent?.label ?? 'Recorded frame'} · ${selectedEvent?.atMs ?? 0} ms`
                         : 'No simulated preview. Frames appear after real browser execution.'}
                     </span>
-                    {displayed && <StatePill run={displayed} />}
+                    {stale ? (
+                      <span className="cut-state-pill" role="status">
+                        STALE · replay required
+                      </span>
+                    ) : (
+                      displayed && <StatePill run={displayed} />
+                    )}
                   </div>
                 </div>
                 <div className="cut-replay-actions">
@@ -733,7 +771,7 @@ export default function AgentWorkspace() {
                     </button>
                     <span className="cut-schedule-note">
                       {scheduleChanged
-                        ? 'Edited · replay to save'
+                        ? 'Edited · older evidence is stale'
                         : session.busy
                           ? 'Runner executing shared checks'
                           : 'Saved schedule · actions & payloads fixed'}
@@ -768,7 +806,7 @@ export default function AgentWorkspace() {
                         onReorder={setDeliveryOrder}
                         busy={!readyToReplay}
                       />
-                      <div className={`cut-assertion ${displayed.status}`}>
+                      <div className={`cut-assertion ${stale ? 'stale' : displayed.status}`}>
                         <span className="cut-assertion-icon">
                           {displayed.status === 'passed' ? (
                             <Check size={15} />
@@ -778,16 +816,20 @@ export default function AgentWorkspace() {
                         </span>
                         <div>
                           <strong>
-                            {displayed.status === 'passed'
-                              ? 'Latest query preserved'
-                              : displayed.status === 'failed'
-                                ? 'Stale response overwrote the latest query'
-                                : 'Schedule execution error'}
+                            {stale
+                              ? 'Stale evidence — replay required'
+                              : displayed.status === 'passed'
+                                ? 'Latest query preserved'
+                                : displayed.status === 'failed'
+                                  ? 'Stale response overwrote the latest query'
+                                  : 'Schedule execution error'}
                           </strong>
                           <p>
-                            {displayed.status === 'error'
-                              ? displayed.error
-                              : 'After both responses are handled, the visible suggestions must belong to “Colombo”.'}
+                            {stale
+                              ? `Recorded order ${displayed.schedule.join(' → ')} from an earlier run. Replay the selected order to verify it.`
+                              : displayed.status === 'error'
+                                ? displayed.error
+                                : 'After both responses are handled, the visible suggestions must belong to “Colombo”.'}
                           </p>
                         </div>
                         <details>
@@ -819,7 +861,9 @@ export default function AgentWorkspace() {
                   </div>
                 )}
                 <footer className="cut-editor-footer">
-                  <span>
+                  <span
+                    title={`Revision ${session.revision}\nSnapshot SHA256 ${session.snapshot}\n${session.dirty ? 'Local edits included' : 'Clean checkout'}`}
+                  >
                     <GitBranch size={12} />
                     {session.revision
                       ? `${session.revision.slice(0, 8)} + snapshot ${session.snapshot.slice(0, 8)}`

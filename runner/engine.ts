@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ViteDevServer } from 'vite'
 import type {
@@ -18,6 +18,7 @@ import {
   captureSnapshot,
   createWorktree,
   safeRead,
+  removeCandidateWorktree,
   type Snapshot,
 } from './worktrees.ts'
 import { latestRequestGuard, queryKeyedResults } from './patches.ts'
@@ -31,13 +32,23 @@ interface Runtime {
   dir: string
   snapshot?: Snapshot
   servers: Map<VersionId, { server: ViteDevServer; url: string }>
+  task?: Promise<void>
+  persistence: Promise<void>
+}
+interface EngineDependencies {
+  command: typeof command
+  fixtureServer: typeof fixtureServer
+  replay: typeof replay
+  runLiveAgent: typeof runLiveAgent
 }
 export class InvestigationEngine {
   root: string
   updates = new EventEmitter()
   sessions = new Map<string, Runtime>()
-  constructor(root: string) {
+  deps: EngineDependencies
+  constructor(root: string, dependencies: Partial<EngineDependencies> = {}) {
     this.root = root
+    this.deps = { command, fixtureServer, replay, runLiveAgent, ...dependencies }
   }
   async restore() {
     const base = join(this.root, 'artifacts/investigations')
@@ -55,7 +66,15 @@ export class InvestigationEngine {
           state.activity = 'Interrupted by runner restart'
           state.error = 'The runner restarted before this run completed. Start a new investigation.'
         }
-        this.sessions.set(id, { state, dir, abort: new AbortController(), servers: new Map() })
+        const runtime: Runtime = {
+          state,
+          dir,
+          abort: new AbortController(),
+          servers: new Map(),
+          persistence: Promise.resolve(),
+        }
+        this.sessions.set(id, runtime)
+        await this.persist(runtime)
       } catch {
         /* Incomplete sessions have no completed manifest to restore. */
       }
@@ -70,7 +89,10 @@ export class InvestigationEngine {
     return [...this.sessions.values()].some((runtime) => runtime.state.busy)
   }
   changed(runtime: Runtime) {
+    runtime.state.sequence = (runtime.state.sequence ?? 0) + 1
     this.updates.emit(runtime.state.id, runtime.state)
+    // Checkpoint active work too, so a crash cannot resurrect an old completed run.
+    void this.persist(runtime).catch(() => {})
   }
   log(runtime: Runtime, kind: ToolEvent['kind'], title: string, detail = '') {
     runtime.state.events.push({
@@ -83,7 +105,16 @@ export class InvestigationEngine {
     this.changed(runtime)
   }
   async persist(runtime: Runtime) {
-    await writeFile(join(runtime.dir, 'session.json'), JSON.stringify(runtime.state, null, 2))
+    const contents = JSON.stringify(runtime.state, null, 2)
+    runtime.persistence = runtime.persistence
+      .catch(() => {})
+      .then(async () => {
+        await mkdir(runtime.dir, { recursive: true })
+        const temp = join(runtime.dir, 'session.json.tmp')
+        await writeFile(temp, contents)
+        await rename(temp, join(runtime.dir, 'session.json'))
+      })
+    await runtime.persistence
   }
   start(task: string, mode: 'sample' | 'live'): Investigation {
     if (this.active())
@@ -114,6 +145,7 @@ export class InvestigationEngine {
     ]
     const state: Investigation = {
       id,
+      attemptId: randomUUID(),
       task,
       mode,
       status: 'running',
@@ -136,17 +168,25 @@ export class InvestigationEngine {
       abort: new AbortController(),
       dir: join(this.root, 'artifacts/investigations', id),
       servers: new Map(),
+      persistence: Promise.resolve(),
     }
     this.sessions.set(id, runtime)
-    void this.investigate(runtime).catch((error: unknown) => this.failed(runtime, error))
+    this.changed(runtime)
+    runtime.task = (async () => {
+      await runtime.persistence
+      await this.investigate(runtime)
+    })().catch((error: unknown) => this.failed(runtime, error))
     return state
   }
   async failed(runtime: Runtime, error: unknown) {
+    await this.closeServers(runtime).catch(() => {})
     runtime.state.busy = false
     runtime.state.status = runtime.abort.signal.aborted ? 'cancelled' : 'error'
     runtime.state.activity =
       runtime.state.status === 'cancelled' ? 'Run cancelled' : 'Investigation stopped'
     runtime.state.error = error instanceof Error ? error.message : String(error)
+    if (error instanceof Error && 'output' in error && typeof error.output === 'string')
+      runtime.state.error += `\n${error.output}`
     this.log(
       runtime,
       runtime.state.status === 'cancelled' ? 'agent' : 'error',
@@ -165,7 +205,7 @@ export class InvestigationEngine {
         ? 'Bundled sample · prewritten patches, real execution'
         : 'Live provider · model-generated patches, real execution',
     )
-    const snapshot = await captureSnapshot(this.root)
+    const snapshot = await captureSnapshot(this.root, runtime.abort.signal)
     runtime.snapshot = snapshot
     Object.assign(runtime.state, {
       revision: snapshot.revision,
@@ -222,7 +262,7 @@ export class InvestigationEngine {
       candidate.ready = true
       await this.check(runtime, candidate)
       if (!runtime.servers.has(candidate.id))
-        runtime.servers.set(candidate.id, await fixtureServer(candidate.worktree))
+        runtime.servers.set(candidate.id, await this.deps.fixtureServer(candidate.worktree))
       for (const order of [
         runtime.state.selectedSchedule,
         [...runtime.state.selectedSchedule].reverse() as Schedule,
@@ -231,6 +271,7 @@ export class InvestigationEngine {
       }
       if (candidate.id !== 'baseline') await this.verifyExport(runtime, candidate)
     }
+    runtime.abort.signal.throwIfAborted()
     runtime.state.status = 'ready'
     runtime.state.busy = false
     runtime.state.activity = 'Investigation ready for review'
@@ -254,8 +295,13 @@ export class InvestigationEngine {
     ] as const) {
       runtime.state.activity = `${candidate.name} · ${title}`
       this.log(runtime, 'command', `${candidate.name} · ${title}`, `cwd: ${cwd}`)
-      const result = await command(cwd, process.execPath, [...args], runtime.abort.signal)
-      runtime.state.checks.push({ version: candidate.id, command: title, ...result })
+      const result = await this.deps.command(cwd, process.execPath, [...args], runtime.abort.signal)
+      runtime.state.checks.push({
+        attemptId: runtime.state.attemptId,
+        version: candidate.id,
+        command: title,
+        ...result,
+      })
       this.log(
         runtime,
         'check',
@@ -277,7 +323,7 @@ export class InvestigationEngine {
       `Playwright Chromium · ${version} · deliver ${order.join(' → ')}`,
       'Real browser run with intercepted requests and explicit release gates. Both responses must be handled before the fixed final assertion.',
     )
-    const result = await replay({
+    const result = await this.deps.replay({
       version,
       order,
       url: fixture.url,
@@ -301,6 +347,8 @@ export class InvestigationEngine {
           )
       },
     })
+    runtime.abort.signal.throwIfAborted()
+    result.attemptId = runtime.state.attemptId
     runtime.state.runs.push(result)
     this.log(
       runtime,
@@ -334,7 +382,7 @@ export class InvestigationEngine {
       join(dir, 'playwright.config.mjs'),
       `process.env.PICKUP_BASE_URL=${JSON.stringify(childEnvUrl)}; export default { testDir: '.', outputDir: ${JSON.stringify(join(dir, 'results'))}, testMatch: 'pickup-regression.spec.ts', workers: 1, reporter: 'line' }\n`,
     )
-    const result = await command(
+    const result = await this.deps.command(
       dir,
       process.execPath,
       [
@@ -346,6 +394,7 @@ export class InvestigationEngine {
       runtime.abort.signal,
     )
     runtime.state.checks.push({
+      attemptId: runtime.state.attemptId,
       version: candidate.id,
       command: 'Playwright exported regression',
       ...result,
@@ -359,7 +408,7 @@ export class InvestigationEngine {
     // A live proposal may fail; retain its real evidence instead of rewriting the assertion.
   }
   async generateLive(runtime: Runtime, candidate: Candidate) {
-    await runLiveAgent({
+    await this.deps.runLiveAgent({
       task: runtime.state.task,
       strategy: candidate.strategy,
       signal: runtime.abort.signal,
@@ -398,7 +447,7 @@ export class InvestigationEngine {
         if (name === 'run_checks') {
           await this.check(runtime, candidate)
           if (!runtime.servers.has(candidate.id))
-            runtime.servers.set(candidate.id, await fixtureServer(cwd))
+            runtime.servers.set(candidate.id, await this.deps.fixtureServer(cwd))
           for (const order of [
             ['B', 'A'],
             ['A', 'B'],
@@ -431,6 +480,7 @@ export class InvestigationEngine {
       throw new Error('Wait for all candidate worktrees before replaying.')
     const schedule = parseSchedule(order)
     runtime.abort = new AbortController()
+    runtime.state.attemptId = randomUUID()
     runtime.state.selectedSchedule = schedule
     runtime.state.busy = true
     runtime.state.status = 'running'
@@ -441,15 +491,16 @@ export class InvestigationEngine {
       `Replay saved order ${schedule.join(' → ')}`,
       'User actions, payloads, and final assertion remain identical across all versions.',
     )
-    void (async () => {
+    runtime.task = (async () => {
       for (const candidate of runtime.state.candidates) {
         if (!runtime.servers.has(candidate.id))
-          runtime.servers.set(candidate.id, await fixtureServer(candidate.worktree!))
+          runtime.servers.set(candidate.id, await this.deps.fixtureServer(candidate.worktree!))
         await this.recordReplay(runtime, candidate.id, schedule)
       }
       for (const candidate of runtime.state.candidates.filter((item) => item.id !== 'baseline'))
         await this.verifyExport(runtime, candidate)
       await writeFile(join(runtime.dir, 'schedule.json'), JSON.stringify(schedule))
+      runtime.abort.signal.throwIfAborted()
       runtime.state.busy = false
       runtime.state.status = 'ready'
       runtime.state.activity = 'Replay complete'
@@ -466,10 +517,56 @@ export class InvestigationEngine {
       this.changed(runtime)
     }
   }
+  async wait(id: string) {
+    const runtime = this.sessions.get(id)
+    if (!runtime) throw new Error('Investigation not found.')
+    await runtime.task
+    await runtime.persistence
+  }
+  async checkpoint(id: string) {
+    const runtime = this.sessions.get(id)
+    if (!runtime) throw new Error('Investigation not found.')
+    await runtime.persistence
+  }
+  retry(id: string) {
+    const state = this.state(id)
+    return this.start(state.task, state.mode)
+  }
+  async closeServers(runtime: Runtime) {
+    for (const fixture of runtime.servers.values()) await fixture.server.close()
+    runtime.servers.clear()
+  }
+  async cleanup(id: string) {
+    const runtime = this.sessions.get(id)
+    if (!runtime) throw new Error('Investigation not found.')
+    if (this.active()) throw new Error('Wait for active tools to stop before cleaning up.')
+    await runtime.task
+    runtime.state.busy = true
+    try {
+      await this.closeServers(runtime)
+      for (const candidate of runtime.state.candidates) {
+        await removeCandidateWorktree(this.root, runtime.dir, candidate.id)
+        candidate.ready = false
+      }
+      runtime.state.cleanedAt = new Date().toISOString()
+      this.log(
+        runtime,
+        'agent',
+        'Candidate worktrees removed; evidence retained',
+        'The original checkout, captured frames, recorded outcomes, and patch exports are preserved. Retry creates fresh worktrees.',
+      )
+    } finally {
+      runtime.state.busy = false
+      this.changed(runtime)
+      await this.persist(runtime)
+    }
+  }
   async close() {
     for (const runtime of this.sessions.values()) {
       runtime.abort.abort()
-      for (const fixture of runtime.servers.values()) await fixture.server.close()
+      await runtime.task
+      await this.closeServers(runtime)
+      await runtime.persistence
     }
   }
   getArtifactDir(id: string) {

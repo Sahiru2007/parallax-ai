@@ -2,6 +2,7 @@ import { Component, Suspense, lazy, type ReactNode } from 'react'
 
 const AgentWorkspace = lazy(() => import('./features/agent/AgentWorkspace'))
 const LegacyApp = lazy(() => import('./LegacyApp'))
+const CodingWorkspace = lazy(() => import('./features/agent/CodingWorkspace'))
 
 class WorkspaceBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
@@ -24,7 +25,13 @@ export default function App() {
   return (
     <WorkspaceBoundary>
       <Suspense fallback={<div className="boot-screen">Opening PARALLAX…</div>}>
-        {window.location.pathname.startsWith('/legacy') ? <LegacyApp /> : <AgentWorkspace />}
+        {window.location.pathname.startsWith('/legacy') ? (
+          <LegacyApp />
+        ) : window.location.pathname.startsWith('/pickup') ? (
+          <AgentWorkspace />
+        ) : (
+          <CodingWorkspace />
+        )}
       </Suspense>
     </WorkspaceBoundary>
   )

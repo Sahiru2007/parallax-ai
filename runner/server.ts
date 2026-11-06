@@ -3,17 +3,27 @@ import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { homedir } from 'node:os'
 import { InvestigationEngine } from './engine.ts'
 import { git } from './process.ts'
 import { providerState } from './provider.ts'
 import { regressionSource } from './regression.ts'
 import { parseSchedule } from '../shared/scenario.ts'
 import type { Investigation } from '../shared/investigation.ts'
+import { CodingEngine } from './coding-engine.ts'
+import { inspectRepo } from './coding-files.ts'
+import { testProviderConfigured } from './coding-provider.ts'
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const root = resolve(
+  process.env.PARALLAX_REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..'),
+)
 const token = randomBytes(32).toString('hex')
 const engine = new InvestigationEngine(root)
 await engine.restore()
+const coding = new CodingEngine(
+  resolve(process.env.PARALLAX_STATE_DIR ?? resolve(homedir(), '.parallax/coding-sessions')),
+)
+await coding.restore()
 const port = Number(process.env.PARALLAX_RUNNER_PORT ?? 4317)
 const json = (response: ServerResponse, status: number, value: unknown) => {
   response.writeHead(status, {
@@ -37,7 +47,12 @@ const server = createServer(async (request, response) => {
     if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host))
       return json(response, 403, { error: 'Local runner only.' })
     const origin = request.headers.origin
-    if (origin && !/^http:\/\/(127\.0\.0\.1|localhost):(1420|1421|4317)$/.test(origin))
+    const extraOrigins = (process.env.PARALLAX_BROWSER_ORIGINS ?? '').split(',').filter(Boolean)
+    if (
+      origin &&
+      !/^http:\/\/(127\.0\.0\.1|localhost):(1420|1421|4317)$/.test(origin) &&
+      !extraOrigins.includes(origin)
+    )
       return json(response, 403, { error: 'Foreign origins cannot access this local runner.' })
     const url = new URL(request.url ?? '/', `http://${host}`)
     if (request.method === 'GET' && url.pathname === '/api/config')
@@ -56,7 +71,114 @@ const server = createServer(async (request, response) => {
       return json(response, 200, { ready: true })
     if (request.method !== 'GET' && request.headers['x-parallax-token'] !== token)
       return json(response, 403, { error: 'Missing local runner token.' })
+    if (request.method === 'GET' && url.pathname === '/api/coding/config')
+      return json(response, 200, {
+        token,
+        live: providerState(),
+        testProvider: testProviderConfigured(),
+        defaultRepo: await inspectRepo(root).catch(() => null),
+      })
+    if (request.method === 'POST' && url.pathname === '/api/coding/repos') {
+      const data = await body(request)
+      if (typeof data.path !== 'string' || !data.path.trim())
+        throw new Error('Enter an existing local Git checkout path.')
+      return json(response, 200, await inspectRepo(data.path))
+    }
+    if (request.method === 'GET' && url.pathname === '/api/coding/sessions')
+      return json(response, 200, coding.list())
+    if (request.method === 'POST' && url.pathname === '/api/coding/sessions') {
+      if (engine.active()) throw new Error('Wait for the active pickup investigation to stop.')
+      const data = await body(request)
+      if (
+        typeof data.path !== 'string' ||
+        typeof data.task !== 'string' ||
+        !data.task.trim() ||
+        data.task.length > 8000
+      )
+        throw new Error('Provide a repository path and a task under 8000 characters.')
+      if (data.provider !== 'live' && data.provider !== 'test')
+        throw new Error('Choose live or test provider.')
+      if (data.provider === 'live' && !providerState().configured)
+        throw new Error(
+          'Live provider not configured. Set OPENAI_API_KEY and PARALLAX_MODEL on the runner; no test-provider fallback is used.',
+        )
+      if (data.provider === 'test' && !testProviderConfigured())
+        throw new Error('The scripted test provider is not enabled.')
+      return json(
+        response,
+        201,
+        await coding.start(data.path, data.task.trim(), data.provider, data.compare === true),
+      )
+    }
+    const codingMatch = /^\/api\/coding\/sessions\/([a-f0-9-]{36})(?:\/(.*))?$/.exec(url.pathname)
+    if (codingMatch) {
+      const [, id, action] = codingMatch
+      const state = coding.state(id)
+      if (request.method === 'GET' && !action) return json(response, 200, state)
+      if (request.method === 'GET' && action === 'events') {
+        response.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          Connection: 'keep-alive',
+        })
+        const send = (value: unknown) =>
+          response.write(`event: state\ndata: ${JSON.stringify(value)}\n\n`)
+        send(state)
+        coding.updates.on(id, send)
+        const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 10_000)
+        request.on('close', () => {
+          clearInterval(heartbeat)
+          coding.updates.off(id, send)
+        })
+        return
+      }
+      if (request.method === 'POST' && action === 'followup') {
+        if (engine.active()) throw new Error('Wait for the active pickup investigation to stop.')
+        const data = await body(request)
+        if (typeof data.message !== 'string' || !data.message.trim() || data.message.length > 8000)
+          throw new Error('Enter a follow-up under 8000 characters.')
+        await coding.followup(id, data.message.trim())
+        return json(response, 202, coding.state(id))
+      }
+      if (request.method === 'POST' && action === 'approve') {
+        const data = await body(request)
+        if (typeof data.requestId !== 'string' || typeof data.approved !== 'boolean')
+          throw new Error('Choose approve or deny for this exact command.')
+        coding.approve(id, data.requestId, data.approved)
+        await coding.checkpoint(id)
+        return json(response, 202, coding.state(id))
+      }
+      if (request.method === 'POST' && action === 'cancel') {
+        coding.cancel(id)
+        await coding.checkpoint(id)
+        return json(response, 202, coding.state(id))
+      }
+      if (request.method === 'POST' && action === 'review')
+        return json(response, 200, await coding.review(id))
+      if (request.method === 'POST' && action === 'apply') {
+        const data = await body(request)
+        if (typeof data.candidate !== 'string' || typeof data.target !== 'string')
+          throw new Error('Select the candidate and target checkout.')
+        return json(response, 200, await coding.apply(id, data.candidate, data.target))
+      }
+      const patch = /^patch\/(a|b)$/.exec(action ?? '')
+      if (request.method === 'GET' && patch) {
+        if (state.busy) throw new Error('Wait for the active turn before exporting its patch.')
+        await coding.review(id)
+        const candidate = state.candidates.find((c) => c.id === patch[1])
+        if (!candidate?.patch) throw new Error('No patch available.')
+        response.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Disposition': `attachment; filename="implementation-${candidate.id}.patch"`,
+          'Cache-Control': 'no-store',
+        })
+        response.end(candidate.patch)
+        return
+      }
+      return json(response, 404, { error: 'Coding session action not found.' })
+    }
     if (request.method === 'POST' && url.pathname === '/api/sessions') {
+      if (coding.active()) throw new Error('Wait for the active coding session to stop.')
       const data = await body(request)
       if (data.repo !== 'current') throw new Error('Choose the registered current repository.')
       if (typeof data.task !== 'string' || !data.task.trim() || data.task.length > 8000)
@@ -68,7 +190,9 @@ const server = createServer(async (request, response) => {
           error:
             'Live mode is not configured. Set OPENAI_API_KEY and PARALLAX_MODEL in the runner environment. Credentials never enter the browser.',
         })
-      return json(response, 201, engine.start(data.task.trim(), data.mode))
+      const state = engine.start(data.task.trim(), data.mode)
+      await engine.checkpoint(state.id)
+      return json(response, 201, state)
     }
     const match = /^\/api\/sessions\/([a-f0-9-]+)(?:\/(.*))?$/.exec(url.pathname)
     if (!match) return json(response, 404, { error: 'Route not found.' })
@@ -95,11 +219,22 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'POST' && action === 'cancel') {
       engine.cancel(id)
+      await engine.checkpoint(id)
       return json(response, 202, engine.state(id))
+    }
+    if (request.method === 'POST' && action === 'retry') {
+      const state = engine.retry(id)
+      await engine.checkpoint(state.id)
+      return json(response, 201, state)
+    }
+    if (request.method === 'POST' && action === 'cleanup') {
+      await engine.cleanup(id)
+      return json(response, 200, engine.state(id))
     }
     if (request.method === 'POST' && action === 'replay') {
       const data = await body(request)
       engine.rerun(id, data.order)
+      await engine.checkpoint(id)
       return json(response, 202, engine.state(id))
     }
     if (request.method === 'POST' && action === 'steer') {
@@ -164,6 +299,7 @@ server.on('error', (error) => {
   process.exitCode = 1
 })
 async function shutdown() {
+  await coding.close()
   await engine.close()
   server.close()
   process.exit(0)

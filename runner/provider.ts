@@ -72,14 +72,19 @@ export async function runLiveAgent(options: {
   steering: () => string[]
   execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
   onText: (text: string) => void
+  instructions?: string
+  tools?: unknown[]
+  history?: { role: 'user' | 'assistant'; content: string }[]
+  maxTurns?: number
 }) {
   if (!providerState().configured)
     throw new Error(
       'Live mode requires OPENAI_API_KEY and PARALLAX_MODEL in the runner environment. No prewritten fallback was used.',
     )
-  const input: unknown[] = [{ role: 'user', content: options.task }]
+  const input: unknown[] = [...(options.history ?? []), { role: 'user', content: options.task }]
   let steeringCount = 0
-  for (let turn = 0; turn < 12; turn++) {
+  const maxTurns = options.maxTurns ?? 12
+  for (let turn = 0; turn < maxTurns; turn++) {
     options.signal.throwIfAborted()
     const steering = options.steering()
     for (const text of steering.slice(steeringCount))
@@ -97,8 +102,10 @@ export async function runLiveAgent(options: {
         include: ['reasoning.encrypted_content'],
         max_output_tokens: 8192,
         store: false,
-        tools,
-        instructions: `You are PARALLAX's coding agent. Work only in the supplied detached candidate worktree. Inspect files, implement a fix, invoke run_checks, and inspect_diff before concluding. Candidate strategy: ${options.strategy}. The reproducible fixture uses Col then Colombo; both response orders must keep the Colombo results. Only fixtures/pickup-search/src/useAddressSearch.ts is writable in this first vertical slice. Do not edit tests, instrumentation, package manifests, or the active checkout. Report real evidence; never claim checks ran without the run_checks tool.`,
+        tools: options.tools ?? tools,
+        instructions:
+          options.instructions ??
+          `You are PARALLAX's coding agent. Work only in the supplied detached candidate worktree. Inspect files, implement a fix, invoke run_checks, and inspect_diff before concluding. Candidate strategy: ${options.strategy}. The reproducible fixture uses Col then Colombo; both response orders must keep the Colombo results. Only fixtures/pickup-search/src/useAddressSearch.ts is writable in this first vertical slice. Do not edit tests, instrumentation, package manifests, or the active checkout. Report real evidence; never claim checks ran without the run_checks tool.`,
         input,
       }),
     })
@@ -139,6 +146,6 @@ export async function runLiveAgent(options: {
     }
   }
   throw new Error(
-    'Live agent reached the 12-turn limit. The partial candidate remains available for review.',
+    `Live agent reached the ${maxTurns}-turn limit. The partial candidate remains available for review.`,
   )
 }

@@ -1,4 +1,4 @@
-import { chromium, expect, type Page, type Route } from '@playwright/test'
+import { chromium, expect, type Browser, type Page, type Route } from '@playwright/test'
 import { createServer, type ViteDevServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import { dirname, join } from 'node:path'
@@ -92,12 +92,14 @@ export async function replay(options: {
     command: `Playwright Chromium API: replay(${options.version}, [${order.join(',')}])`,
   }
   options.signal.throwIfAborted()
-  const browser = await chromium.launch({ headless: true })
+  let browser: Browser | undefined
   const cancel = () => {
-    void browser.close().catch(() => {})
+    void browser?.close().catch(() => {})
   }
   options.signal.addEventListener('abort', cancel, { once: true })
   try {
+    browser = await chromium.launch({ headless: true, timeout: 15_000 })
+    options.signal.throwIfAborted()
     const page = await browser.newPage({
       viewport: { width: 900, height: 610 },
       reducedMotion: 'reduce',
@@ -235,7 +237,7 @@ export async function replay(options: {
     output.push(result.error)
   } finally {
     options.signal.removeEventListener('abort', cancel)
-    await browser.close()
+    await browser?.close()
   }
   result.durationMs = Math.round(performance.now() - started)
   result.output = output.join('\n')

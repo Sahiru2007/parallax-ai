@@ -1,0 +1,195 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { CodingConfig, CodingRepo, CodingSession } from '../../../shared/coding'
+
+export function useCoding() {
+  const [config, setConfig] = useState<CodingConfig | null>(null)
+  const [repo, setRepo] = useState<CodingRepo | null>(null)
+  const [session, setSession] = useState<CodingSession | null>(null)
+  const [history, setHistory] = useState<CodingSession[]>([])
+  const [error, setError] = useState('')
+  const [connecting, setConnecting] = useState(true)
+  const current = useRef<string | null>(null)
+  const token = useRef('')
+  const accept = useCallback((state: CodingSession, activate = false) => {
+    if (activate) {
+      current.current = state.id
+      localStorage.setItem('parallax-coding-session', state.id)
+      setRepo(state.repo)
+    }
+    if (current.current !== state.id) return
+    setSession((old) => (old?.id === state.id && old.sequence > state.sequence ? old : state))
+  }, [])
+  const refreshHistory = useCallback(async () => {
+    const response = await fetch('/api/coding/sessions')
+    if (response.ok) setHistory((await response.json()) as CodingSession[])
+  }, [])
+  const open = useCallback(
+    async (id: string) => {
+      const response = await fetch(`/api/coding/sessions/${id}`)
+      if (!response.ok) throw new Error('Saved coding session not found.')
+      accept((await response.json()) as CodingSession, true)
+    },
+    [accept],
+  )
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const response = await fetch('/api/coding/config')
+        if (!response.ok) throw new Error('Start the local runner with npm run dev.')
+        const next = (await response.json()) as CodingConfig
+        if (!active) return
+        setConfig(next)
+        token.current = next.token
+        setRepo(next.defaultRepo)
+        setConnecting(false)
+        await refreshHistory()
+        const previous = localStorage.getItem('parallax-coding-session')
+        if (previous && !current.current && active) await open(previous)
+      } catch (problem) {
+        if (active) {
+          setError(String(problem))
+          setConnecting(false)
+        }
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [open, refreshHistory])
+  useEffect(() => {
+    if (!session?.id) return
+    let active = true
+    const id = session.id
+    let source: EventSource | undefined
+    let checking = false
+    function connect() {
+      source = new EventSource(`/api/coding/sessions/${id}/events`)
+      source.addEventListener('state', (event: MessageEvent<string>) => {
+        if (active) accept(JSON.parse(event.data) as CodingSession)
+      })
+      source.onerror = () => {
+        if (active) setConnecting(true)
+      }
+      source.onopen = () => {
+        void synchronize()
+      }
+    }
+    async function synchronize() {
+      if (checking) return
+      checking = true
+      try {
+        const response = await fetch('/api/coding/config', { signal: AbortSignal.timeout(1500) })
+        if (!response.ok) throw new Error('Runner unavailable')
+        const next = (await response.json()) as CodingConfig
+        if (!active || current.current !== id) return
+        if (token.current !== next.token) {
+          // The last durable checkpoint may precede the last event received by this UI.
+          setSession((old) => (old?.id === id ? { ...old, sequence: -1 } : old))
+          const restored = (await (
+            await fetch(`/api/coding/sessions/${id}`)
+          ).json()) as CodingSession
+          if (active) accept(restored)
+          await refreshHistory()
+        }
+        token.current = next.token
+        setConfig(next)
+        setConnecting(false)
+        if (!source || source.readyState === EventSource.CLOSED) connect()
+      } catch {
+        if (active) {
+          setConnecting(true)
+          source?.close()
+          source = undefined
+        }
+      } finally {
+        checking = false
+      }
+    }
+    connect()
+    // A development proxy can keep an SSE socket open after its upstream process dies.
+    // Polling health detects that case and reopens the stream after runner recovery.
+    const heartbeat = window.setInterval(() => {
+      void synchronize()
+    }, 1000)
+    return () => {
+      active = false
+      source?.close()
+      clearInterval(heartbeat)
+    }
+  }, [session?.id, accept, refreshHistory])
+  const request = useCallback(async (path: string, data: unknown) => {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Parallax-Token': token.current },
+      body: JSON.stringify(data),
+    })
+    const result = (await response.json()) as CodingSession & CodingRepo & { error?: string }
+    if (!response.ok) throw new Error(result.error ?? 'Runner request failed.')
+    return result
+  }, [])
+  const action = useCallback(
+    async (path: string, data: unknown, activate = false) => {
+      setError('')
+      try {
+        const state = await request(path, data)
+        accept(state, activate)
+        await refreshHistory()
+        return state
+      } catch (problem) {
+        setError(problem instanceof Error ? problem.message : String(problem))
+        return null
+      }
+    },
+    [accept, request, refreshHistory],
+  )
+  useEffect(() => {
+    if (!session || session.busy) return
+    const timer = window.setInterval(() => {
+      void request(`/api/coding/sessions/${session.id}/review`, {})
+        .then((state) => accept(state))
+        .catch(() => {})
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [session?.id, session?.busy, request, accept, session])
+  return {
+    config,
+    repo,
+    session,
+    history,
+    error,
+    connecting,
+    open,
+    openRepo: async (path: string) => {
+      setError('')
+      try {
+        const value = await request('/api/coding/repos', { path })
+        setRepo(value)
+        localStorage.setItem('parallax-repo-path', value.path)
+        return value
+      } catch (problem) {
+        setError(String(problem))
+        return null
+      }
+    },
+    start: (task: string, provider: 'live' | 'test', compare: boolean) =>
+      action('/api/coding/sessions', { path: repo?.path, task, provider, compare }, true),
+    followup: (message: string) =>
+      action(`/api/coding/sessions/${session?.id}/followup`, { message }),
+    approve: (approved: boolean) =>
+      action(`/api/coding/sessions/${session?.id}/approve`, {
+        requestId: session?.approval?.id,
+        approved,
+      }),
+    cancel: () => action(`/api/coding/sessions/${session?.id}/cancel`, {}),
+    review: () => action(`/api/coding/sessions/${session?.id}/review`, {}),
+    apply: (candidate: string, target: string) =>
+      action(`/api/coding/sessions/${session?.id}/apply`, { candidate, target }),
+    newSession: () => {
+      current.current = null
+      setSession(null)
+      localStorage.removeItem('parallax-coding-session')
+      setError('')
+    },
+  }
+}

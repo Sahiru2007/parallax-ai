@@ -17,6 +17,7 @@ export interface TraceEvent {
 }
 export interface ReplayResult {
   id: string
+  attemptId?: string
   version: VersionId
   schedule: Schedule
   status: RunStatus
@@ -36,6 +37,7 @@ export interface ToolEvent {
   detail: string
 }
 export interface CheckResult {
+  attemptId?: string
   version: VersionId
   command: string
   exitCode: number
@@ -52,6 +54,9 @@ export interface Candidate {
 }
 export interface Investigation {
   id: string
+  sequence?: number
+  attemptId?: string
+  cleanedAt?: string
   task: string
   mode: 'sample' | 'live'
   status: 'running' | 'ready' | 'cancelled' | 'error'

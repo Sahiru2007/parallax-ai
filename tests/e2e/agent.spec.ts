@@ -4,10 +4,27 @@ import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import type { Investigation, RunnerConfig } from '../../shared/investigation.ts'
 import { captureSnapshot } from '../../runner/worktrees.ts'
+import { EXPECTED_ITEMS, scenario } from '../../shared/scenario.ts'
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(180_000)
 let completedSession: string | null = null
+test.afterEach(async ({ page, request }, info) => {
+  if (info.status === info.expectedStatus) return
+  const id = await page
+    .evaluate(() => localStorage.getItem('parallax-investigation'))
+    .catch(() => null)
+  if (!id) return
+  const config = (await (await request.get('/api/config')).json()) as RunnerConfig
+  await request.post(`/api/sessions/${id}/cancel`, {
+    headers: { 'X-Parallax-Token': config.token },
+  })
+  await expect
+    .poll(
+      async () => ((await (await request.get(`/api/sessions/${id}`)).json()) as Investigation).busy,
+    )
+    .toBe(false)
+})
 
 test('investigate, edit timing, compare real worktrees, export a checked patch and regression', async ({
   page,
@@ -39,7 +56,7 @@ test('investigate, edit timing, compare real worktrees, export a checked patch a
   expect(state.status).toBe('ready')
   completedSession = state.id
   expect(state.revision).toBe(revision)
-  expect(state.dirty).toBe(true)
+  expect(state.dirty).toBe(initialSnapshot.dirty)
   expect(state.snapshot).toMatch(/^[a-f0-9]{64}$/)
   expect(state.candidates.map((item) => item.worktree)).toHaveLength(3)
   for (const candidate of state.candidates) {
@@ -60,6 +77,17 @@ test('investigate, edit timing, compare real worktrees, export a checked patch a
   ])
   expect(state.checks).toHaveLength(8)
   expect(state.checks.every((check) => check.exitCode === 0)).toBe(true)
+  for (const run of state.runs) {
+    expect(
+      run.events.filter((event) => event.kind === 'action').map((event) => event.query),
+    ).toEqual(['Col', 'Colombo'])
+    expect(
+      run.events
+        .filter((event) => event.kind === 'response')
+        .map((event) => [event.requestId, event.payload]),
+    ).toEqual(run.schedule.map((id) => [id, [...scenario[id].items]]))
+    expect(run.expectedItems).toEqual(EXPECTED_ITEMS)
+  }
   expect(
     state.events.some(
       (event) => event.kind === 'read' && event.detail.includes('setResults(payload.items)'),
@@ -83,6 +111,11 @@ test('investigate, edit timing, compare real worktrees, export a checked patch a
   await page.getByRole('tab', { name: /Baseline/ }).click()
   await page.getByTestId('response-B').dragTo(page.getByTestId('response-A'))
   await expect(page.locator('.cut-order-pill')).toHaveText('AB')
+  await expect(page.locator('.cut-assertion')).toContainText('Stale evidence')
+  await expect(page.getByRole('tab', { name: /Baseline/ })).toContainText('STALE')
+  await page.reload()
+  await expect(page.locator('.cut-assertion')).toContainText('Stale evidence')
+  await expect(page.locator('.cut-order-pill')).toHaveText('AB')
   await page.getByRole('button', { name: 'Replay all versions', exact: true }).click()
   await expect(page.locator('.cut-agent-status')).toContainText('Replay complete', {
     timeout: 60_000,
@@ -91,6 +124,7 @@ test('investigate, edit timing, compare real worktrees, export a checked patch a
   await page.getByRole('button', { name: 'Move response B earlier', exact: true }).focus()
   await page.keyboard.press('Enter')
   await expect(page.locator('.cut-order-pill')).toHaveText('BA')
+  await expect(page.locator('.cut-assertion')).toContainText('Stale evidence')
   await page.getByRole('button', { name: 'Replay all versions', exact: true }).click()
   await expect(page.locator('.cut-agent-status')).toContainText('Replay complete', {
     timeout: 60_000,
@@ -151,6 +185,59 @@ test('investigate, edit timing, compare real worktrees, export a checked patch a
   await page.screenshot({ path: 'artifacts/agent-candidate-success.png' })
 })
 
+test('a delayed response from an older session cannot replace a retry or its reload target', async ({
+  page,
+}) => {
+  if (!completedSession) throw new Error('Completed session is required')
+  await page.goto('/pickup')
+  await page.evaluate((id) => localStorage.setItem('parallax-investigation', id), completedSession)
+  await page.reload()
+  await expect(page.getByRole('textbox', { name: 'Steer this investigation' })).toBeVisible()
+  let release!: () => void
+  let captured!: () => void
+  const held = new Promise<void>((r) => {
+    release = r
+  })
+  const intercepted = new Promise<void>((r) => {
+    captured = r
+  })
+  await page.route(`**/api/sessions/${completedSession}/steer`, async (route) => {
+    const response = await route.fetch()
+    const json = await response.json()
+    captured()
+    await held
+    await route.fulfill({ json })
+  })
+  await page
+    .getByRole('textbox', { name: 'Steer this investigation' })
+    .fill('Hold this response to reproduce a network race')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await intercepted
+  await page.getByRole('button', { name: 'New investigation', exact: true }).click()
+  await page.getByRole('button', { name: /Fix the pickup-search race/ }).click()
+  await page.getByRole('button', { name: 'Start investigation', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Cancel active run', exact: true })).toBeVisible()
+  const fresh = await page.evaluate(() => localStorage.getItem('parallax-investigation'))
+  expect(fresh).toBeTruthy()
+  expect(fresh).not.toBe(completedSession)
+  const delivered = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/${completedSession}/steer`) &&
+      response.request().method() === 'POST',
+  )
+  release()
+  await delivered
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('parallax-investigation')))
+    .toBe(fresh)
+  await page.getByRole('button', { name: 'Cancel active run', exact: true }).click()
+  await expect(page.locator('.cut-agent-status')).toContainText('Run cancelled')
+  await page.reload()
+  await expect(page.locator('.cut-agent-status')).toContainText('Run cancelled')
+  expect(await page.evaluate(() => localStorage.getItem('parallax-investigation'))).toBe(fresh)
+  await page.getByRole('button', { name: 'Clean up candidate worktrees', exact: true }).click()
+})
+
 test('cancel active tools and reject invalid schedules and foreign requests', async ({
   page,
   request,
@@ -166,6 +253,11 @@ test('cancel active tools and reject invalid schedules and foreign requests', as
     data: { repo: 'current', task: 'test', mode: 'sample' },
   })
   expect(foreign.status()).toBe(403)
+  const invalidRepo = await request.post('/api/sessions', {
+    headers,
+    data: { repo: 'missing-repository', task: 'test', mode: 'sample' },
+  })
+  expect(invalidRepo.status()).toBe(400)
   await page.goto('/')
   await expect(page.getByText('Runner connected', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: /Fix the pickup-search race/ }).click()
@@ -220,4 +312,19 @@ test('cancel active tools and reject invalid schedules and foreign requests', as
       { timeout: 15_000 },
     )
     .toBe('cancelled')
+  const previous = id
+  await page.getByRole('button', { name: 'Retry investigation', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Cancel active run', exact: true })).toBeVisible()
+  const retryId = await page.evaluate(() => localStorage.getItem('parallax-investigation'))
+  expect(retryId).not.toBe(previous)
+  await page.getByRole('button', { name: 'Cancel active run', exact: true }).click()
+  await expect(page.locator('.cut-agent-status')).toContainText('Run cancelled')
+  await page.getByRole('button', { name: 'Clean up candidate worktrees', exact: true }).click()
+  await expect(
+    page.getByRole('button', { name: 'Clean up candidate worktrees', exact: true }),
+  ).toHaveCount(0)
+  const cleaned = (await (await request.get(`/api/sessions/${retryId}`)).json()) as Investigation
+  expect(cleaned.cleanedAt).toBeTruthy()
+  expect(cleaned.runs).toEqual([])
+  expect((await (await request.get(`/api/sessions/${previous}`)).json()).status).toBe('cancelled')
 })
