@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/legacy')
   await expect(page.locator('.react-flow__node-future')).toHaveCount(3)
 })
 

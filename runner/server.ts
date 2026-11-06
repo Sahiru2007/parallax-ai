@@ -1,0 +1,176 @@
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { randomBytes } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { InvestigationEngine } from './engine.ts'
+import { git } from './process.ts'
+import { providerState } from './provider.ts'
+import { regressionSource } from './regression.ts'
+import { parseSchedule } from '../shared/scenario.ts'
+import type { Investigation } from '../shared/investigation.ts'
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const token = randomBytes(32).toString('hex')
+const engine = new InvestigationEngine(root)
+await engine.restore()
+const port = Number(process.env.PARALLAX_RUNNER_PORT ?? 4317)
+const json = (response: ServerResponse, status: number, value: unknown) => {
+  response.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  })
+  response.end(JSON.stringify(value))
+}
+async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
+  let value = ''
+  for await (const chunk of request) {
+    value += String(chunk)
+    if (value.length > 64_000) throw new Error('Request exceeds 64 KB.')
+  }
+  return JSON.parse(value || '{}') as Record<string, unknown>
+}
+const server = createServer(async (request, response) => {
+  try {
+    const host = request.headers.host ?? ''
+    if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host))
+      return json(response, 403, { error: 'Local runner only.' })
+    const origin = request.headers.origin
+    if (origin && !/^http:\/\/(127\.0\.0\.1|localhost):(1420|1421|4317)$/.test(origin))
+      return json(response, 403, { error: 'Foreign origins cannot access this local runner.' })
+    const url = new URL(request.url ?? '/', `http://${host}`)
+    if (request.method === 'GET' && url.pathname === '/api/config')
+      return json(response, 200, {
+        token,
+        repo: {
+          id: 'current',
+          name: 'parallax-ai / pickup-search',
+          path: root,
+          revision: await git(root, ['rev-parse', 'HEAD']),
+          dirty: Boolean(await git(root, ['status', '--porcelain'])),
+        },
+        live: providerState(),
+      })
+    if (request.method === 'GET' && url.pathname === '/api/health')
+      return json(response, 200, { ready: true })
+    if (request.method !== 'GET' && request.headers['x-parallax-token'] !== token)
+      return json(response, 403, { error: 'Missing local runner token.' })
+    if (request.method === 'POST' && url.pathname === '/api/sessions') {
+      const data = await body(request)
+      if (data.repo !== 'current') throw new Error('Choose the registered current repository.')
+      if (typeof data.task !== 'string' || !data.task.trim() || data.task.length > 8000)
+        throw new Error('Provide a task between 1 and 8000 characters.')
+      if (data.mode !== 'sample' && data.mode !== 'live')
+        throw new Error('Choose sample or live mode.')
+      if (data.mode === 'live' && !providerState().configured)
+        return json(response, 409, {
+          error:
+            'Live mode is not configured. Set OPENAI_API_KEY and PARALLAX_MODEL in the runner environment. Credentials never enter the browser.',
+        })
+      return json(response, 201, engine.start(data.task.trim(), data.mode))
+    }
+    const match = /^\/api\/sessions\/([a-f0-9-]+)(?:\/(.*))?$/.exec(url.pathname)
+    if (!match) return json(response, 404, { error: 'Route not found.' })
+    const [, id, action] = match
+    const state = engine.state(id)
+    if (request.method === 'GET' && !action) return json(response, 200, state)
+    if (request.method === 'GET' && action === 'events') {
+      response.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      })
+      const send = (data: Investigation) =>
+        response.write(`event: state\ndata: ${JSON.stringify(data)}\n\n`)
+      send(state)
+      engine.updates.on(id, send)
+      const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 15_000)
+      request.on('close', () => {
+        clearInterval(heartbeat)
+        engine.updates.off(id, send)
+      })
+      return
+    }
+    if (request.method === 'POST' && action === 'cancel') {
+      engine.cancel(id)
+      return json(response, 202, engine.state(id))
+    }
+    if (request.method === 'POST' && action === 'replay') {
+      const data = await body(request)
+      engine.rerun(id, data.order)
+      return json(response, 202, engine.state(id))
+    }
+    if (request.method === 'POST' && action === 'steer') {
+      const data = await body(request)
+      if (typeof data.message !== 'string' || !data.message.trim() || data.message.length > 4000)
+        throw new Error('Provide a steering note between 1 and 4000 characters.')
+      engine.steer(id, data.message.trim())
+      return json(response, 200, engine.state(id))
+    }
+    if (request.method === 'GET' && action === 'regression') {
+      const order = parseSchedule(
+        url.searchParams.get('order')?.split(',') ?? state.selectedSchedule,
+      )
+      const source = regressionSource(order)
+      response.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="pickup-regression.spec.ts"',
+        'Cache-Control': 'no-store',
+      })
+      response.end(source)
+      return
+    }
+    if (request.method === 'GET' && /^patch\/(a|b)$/.test(action ?? '')) {
+      const candidate = state.candidates.find((item) => item.id === action!.split('/')[1])
+      if (!candidate?.patch) throw new Error('No actual patch is available yet.')
+      response.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': `attachment; filename="candidate-${candidate.id}.patch"`,
+        'Cache-Control': 'no-store',
+      })
+      response.end(candidate.patch)
+      return
+    }
+    if (
+      request.method === 'GET' &&
+      /^frames\/[a-f0-9-]+-(action|state)-[AB]\.png$/.test(action ?? '')
+    ) {
+      const name = action!.split('/')[1]
+      const png = await readFile(join(engine.getArtifactDir(id), 'frames', name))
+      response.writeHead(200, {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'private, max-age=3600',
+        'X-Content-Type-Options': 'nosniff',
+      })
+      response.end(png)
+      return
+    }
+    json(response, 404, { error: 'Route not found.' })
+  } catch (error) {
+    if (!response.headersSent)
+      json(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    else response.end()
+  }
+})
+server.listen(port, '127.0.0.1', () =>
+  console.log(
+    `PARALLAX local runner · http://127.0.0.1:${port} · sample execution ready · live ${providerState().configured ? 'configured' : 'not configured'}`,
+  ),
+)
+server.on('error', (error) => {
+  console.error(`Runner could not start: ${error.message}`)
+  process.exitCode = 1
+})
+async function shutdown() {
+  await engine.close()
+  server.close()
+  process.exit(0)
+}
+process.once('SIGINT', () => {
+  void shutdown()
+})
+process.once('SIGTERM', () => {
+  void shutdown()
+})

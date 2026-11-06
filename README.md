@@ -1,114 +1,139 @@
 # PARALLAX AI
 
-**One objective. Multiple futures. Your decision.**
+A local coding-agent workspace for investigating browser timing bugs. Give it a task, watch actual repository tools run, edit response delivery order, compare competing fixes, and export a patch with its reproducible regression test.
 
-PARALLAX is an experimental developer command center built around the **Development Multiverse**: explore alternative approaches, inspect their proposed changes, and compare evidence before choosing a direction.
+The first complete workflow is the **pickup-address search race**. The main screen opens directly into an agent session composer. The earlier seven-screen foundation remains available at `/legacy`; it is outside the primary workflow. Its native setup reference is preserved in [docs/phase-1-native.md](docs/phase-1-native.md).
 
-This is the **Phase 1 foundation**, built with Tauri 2, React, strict TypeScript, Vite, Tailwind CSS 4, XYFlow / React Flow, Motion, Lucide, and Zustand. Dependencies were resolved from stable npm releases; `package-lock.json` records the verified frontend versions.
+## Launch
 
-## Run the frontend
-
-Use Node.js **24 LTS** and npm. From this directory:
+Use **Node.js 24 LTS**, Git, and the existing npm dependencies. From this repository:
 
 ```powershell
 npm.cmd ci
+npx.cmd playwright install chromium
 npm.cmd run dev
 ```
 
-Open **http://127.0.0.1:1420**. On macOS/Linux, or Windows shells without the PowerShell script restriction, use `npm` instead of `npm.cmd`. The server uses a strict port so Tauri always connects to the intended local app.
+Open **http://127.0.0.1:1420**. On other shells, use `npm` / `npx` without `.cmd`. `npm run dev` starts both Vite and the local runner at `127.0.0.1:4317`. The browser accesses the runner through Vite's same-origin `/api` proxy. No API key, Rust build, Visual Studio installation, or desktop toolchain changes are required for this workflow. Chromium need only be installed once.
 
-## Run the desktop application
+## Run the complete example
 
-Install the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/), including:
+1. Click **Fix the pickup-search race**, then **Start investigation**.
+2. Watch the session stream: revision capture, actual file reads, detached worktree creation, applied prewritten recipes, TypeScript checks, contract tests, Playwright runs, and actual patch diffs. Expand a tool event to read its output. The task composer stays docked so you can add steering notes, and **Cancel** interrupts active tools.
+3. The baseline fails for **B → A**: type `Col`, type `Colombo`, release B, then release A. The late `Col` response overwrites the `Colombo` results. Baseline passes for **A → B**. Both candidate implementations are checked against both orders.
+4. Use **Baseline**, **Candidate A**, and **Candidate B** above the browser recording. Switching preserves the selected order and displays that version's recorded outcome. Select an event to inspect the actual request, fixed payload, observed suggestions, elapsed time, and captured browser frame.
+5. Drag one network response onto the other, or use its **Move earlier / Move later** buttons. **Replay all versions** launches fresh real Chromium runs for the selected schedule. Previously recorded outcomes remain visible while rerunning; they are recordings, not live simulated verification.
+6. Open **Review patch**, compare the two actual diffs, and **Export this patch** for your chosen candidate. **Save regression test** downloads a standalone Playwright test for the selected order. The runner executes that same exported test against both candidates.
 
-- Rust stable through [rustup](https://rustup.rs/), with `cargo` on PATH. This scaffold requires Rust 1.90 or newer.
-- On Windows: Visual Studio Build Tools with **Desktop development with C++**, the MSVC toolchain, and a Windows SDK; Microsoft Edge WebView2 runtime.
-- On macOS/Linux: the corresponding Xcode or system WebKit/build dependencies documented by Tauri.
+Candidate A uses a **latest-request guard**. Candidate B stores **results by query** and renders only the active query's entry. They change only `fixtures/pickup-search/src/useAddressSearch.ts` in their own worktrees. The bundled mode labels these fixes as **prewritten**, never as model output. Its worktrees, browser runs, observations, diffs, and assertions are real.
 
-Then run:
+The browser panel displays actual captured frames. Playback and the shared playhead navigate those observations; **Replay all versions** performs execution. The three tracks are user actions, network responses, and observed UI state. Response-to-state links are recorded after the response JSON is consumed and the browser has two animation frames to commit. The harness reads the actual DOM; it does not ask a model to judge the result. The full screenshot can be opened from the browser toolbar.
 
-```powershell
-npm.cmd run tauri -- dev
-```
+## What is held constant
 
-Tauri starts Vite automatically. Do not start a second Vite server on the same port. To create a native release bundle:
+Both user actions and both JSON bodies come from `shared/scenario.ts` and stay identical when the order changes. Playwright intercepts both requests and holds each behind an explicit release gate. After every delivery it waits for JSON handling, reads the rendered suggestions, and captures a frame. After **both** deliveries, every version faces the same executable assertion: visible suggestions must match the active `Colombo` query.
 
-```powershell
-npm.cmd run tauri -- build
-```
+Missing, duplicate, incomplete, or otherwise unexecutable schedules produce an explicit error. A failing behavior assertion is distinct from an execution error. No invented timing, test counts, confidence scores, or agent execution are displayed.
 
-**Current machine limitation:** Node 24 and WebView2 are installed. Rust, Cargo, and the required MSVC/SDK components were not detected. The frontend is built and browser-tested; native compilation and desktop launch could not be verified. `tauri build` currently exits at `cargo metadata` because Cargo is unavailable. No system toolchains were installed or modified.
+## Baseline and preservation of your work
 
-## Explore the prototype
+An experiment is based on **the current HEAD plus a captured working-copy snapshot**, not an implicit clean checkout. The UI and session log show the exact revision, SHA-256 snapshot digest, dirty state, and source file count. Tracked edits and nonignored untracked source are included. Ignored caches, environment credentials, and build artifacts are excluded.
 
-- **Future Explorer:** pan with a mouse drag or scroll, zoom with a pinch or the canvas controls, and fit the complete graph. Select JWT, server-side sessions, or managed authentication to update the inspector. Nodes can also be focused with Tab and selected with Enter or Space.
-- **Future inspector:** cycle alternatives, inspect strategies and dependencies, view proposed files, expand sample test explanations, and record a preferred future.
-- **Dashboard:** open the sample project, inspect active-contract counts and local preferences, and use shortcuts to the other screens.
-- **Behavioral Contracts:** enable or disable requirements, filter the checklist, edit acceptance conditions, and restore the examples.
-- **Mission Control:** select a planned step to inspect its context, verification task, and illustrative result.
-- **Development Timeline:** filter hypothetical history, select an event, and open the related screen.
-- **Evidence Inspector:** compare sample test outcomes, inspect before/after code excerpts, compare a file against another alternative, and review proposed dependencies.
-- **Settings:** toggle the canvas grid, reduced motion, and compact navigation; restore local defaults.
-- **Command palette:** press **Ctrl+K** (or **Cmd+K**) to search screens and futures. Enter opens the first result; Tab reaches individual results; Escape dismisses the dialog.
-- Collapse the sidebar, future inspector, or bottom activity panel to make room. Small browser windows use an icon rail and an overlay inspector. The native window has a 900 × 640 minimum.
+The runner creates three detached Git worktrees at the captured revision, then materializes the same snapshot in all three before applying candidate edits. It does not commit, reset, switch branches, push, or apply a candidate to your checkout. Diffs compare the candidate hook to the captured baseline hook, including when that fixture is still untracked in HEAD. Existing installed dependencies are reused through a worktree-local link; no candidate dependency installations occur.
 
-### What “mock” means
-
-The authentication experiment is hand-authored. Its strategies, test results, file paths, line counts, dependencies, and timestamps are examples. The proposed authentication files **are not actual project files**; dependency examples **are not installed**. Code excerpts are deliberately incomplete and must not be used as authentication implementations.
-
-Editing acceptance conditions does **not** execute tests or change fixture results. Marking a future as preferred saves a local annotation and does **not** apply code. The terminal is an explicitly labeled placeholder. There is no LLM connection, autonomous execution, sandbox, real experiment runner, filesystem project connection, or backend yet.
-
-Zustand persists contract edits, selected/preferred futures, and display preferences in browser/WebView local storage under `parallax-phase1`. Browser and desktop profiles have separate storage. Screen navigation and panel-open state reset on reload. Fonts and application assets are bundled locally; the UI does not require an external API.
-
-## Project structure
+Evidence, manifests, screenshots, exported tests, and retained worktrees live under the ignored directory:
 
 ```text
-src/
-  components/           Shared controls, identity, command palette
-  features/
-    dashboard/          Workspace overview and shortcuts
-    explorer/           XYFlow graph and contextual future inspector
-    contracts/          Editable acceptance-condition checklist
-    mission/            Inspectable prototype plan
-    timeline/           Filterable hypothetical experiment history
-    evidence/           Test, file, and dependency comparison
-    settings/           Local display and data controls
-  hooks/                Experiment loading lifecycle
-  layouts/              Application frame and activity/terminal panel
-  mocks/                Explicitly hand-authored experiment fixtures
-  services/             ExperimentRepository backend boundary
-  stores/               Typed Zustand state and local persistence
-  types/                Shared domain interfaces
-  index.css             Design tokens, component styling, responsive rules
-src-tauri/              Native entry points, icons, CSP, capabilities
-tests/e2e/              Browser interaction and responsive checks
-tests/production/       Built-asset CSP and window-size regression check
+artifacts/investigations/<session-id>/
+  session.json
+  replay-<run-id>.json
+  schedule.json                 # saved after a reordered replay
+  frames/
+  worktrees/baseline/
+  worktrees/a/
+  worktrees/b/
+  exports/a/
+  exports/b/
 ```
 
-The UI consumes the `Experiment` domain model through `ExperimentRepository`. A future backend can replace the repository implementation without moving orchestration into React components. Local contract and preference writes currently belong to the UI store; a future persistence service can implement these separately. Screen modules load on demand.
+Reloading the page reconnects to the session. Completed session manifests are restored after restarting the runner; a replay then reopens their fixture servers. Interrupted runs are marked interrupted, never completed. Worktrees are retained for review. Use `git worktree list` to inspect them; there is no automatic destructive cleanup.
 
-The Tauri shell exposes **no privileged IPC capabilities** or custom commands. Its CSP permits local assets, local IPC, and inline styles required by the graph/animation libraries; development additionally permits the local Vite websocket. Native OS window controls remain available above the custom application bar.
+## Run an exported regression independently
 
-## Verification and maintenance
+The downloaded test has no imports from PARALLAX or the candidate implementation. It contains the fixed actions, payloads, delivery gates, handling barrier, and final assertion.
+
+Start the chosen worktree's fixture in one terminal:
+
+```powershell
+$env:PICKUP_WORKTREE = 'E:\projects\parallax-ai\artifacts\investigations\YOUR-SESSION\worktrees\a'
+npm.cmd run fixture
+```
+
+The command prints its actual local URL. Put the downloaded `pickup-regression.spec.ts` in a folder called `regression-export`, then in another terminal:
+
+```powershell
+$env:PICKUP_BASE_URL = 'http://127.0.0.1:PORT-PRINTED-ABOVE'
+npx.cmd playwright test --config ./regression-export pickup-regression.spec.ts --output ./regression-export/results
+```
+
+The end-to-end test also runs the downloaded file through this standalone CLI path and checks that the exported patch applies to the captured baseline with `git apply --check`. Applying a patch to your own checkout remains your decision.
+
+## Optional live agent
+
+There was no provider integration in this repository. The runner now includes one configurable **OpenAI Responses API** provider with real function tools:
+
+- `list_files` and `read_file` inspect the captured repository.
+- `write_file` edits the candidate hook inside its isolated worktree.
+- `run_checks` invokes the same executable type checks and browser harness.
+- `inspect_diff` reads the actual candidate patch.
+
+Copy `.env.example` to the ignored `.env` and configure a model your account can access:
+
+```text
+OPENAI_API_KEY=your-key
+PARALLAX_MODEL=your-responses-model-id
+```
+
+Restart `npm run dev`, then select **Live agent** in the composer. Keys stay in the runner, are never returned by the API, and are stripped from candidate command environments. Requests use `store: false` and preserve the complete Responses tool context. Steering notes are included at the next model tool boundary. There is a 12-turn limit. Provider failures are reported explicitly; live mode never silently substitutes prewritten patches.
+
+**Live provider mode has not been exercised against the OpenAI API in this workspace.** Verification used the bundled mode without an API key. The live implementation and types are present; API credentials and model access are needed to verify it against the real service.
+
+## Scope and execution boundary
+
+This is one complete vertical slice, not a general repository agent or a security sandbox. The repository selector currently registers this repository only. Both modes use the pickup fixture and immutable shared checks; live writes are restricted to its search hook. Arbitrary app harness discovery, general shell tools, browser video recording, and automatic patch application are not implemented.
+
+The runner binds to loopback, validates request origins/hosts, requires a random local token on mutations, excludes credential files, and confines model file access to source in the candidate worktree. Browser replays block network traffic outside their fixture origin. Exported-test outputs are isolated from the repository's own test reports. These boundaries support trusted local development; detached Git worktrees are not an OS-level execution sandbox.
+
+The existing Tauri project and native setup work are preserved. This rebuild is browser-runnable first; native packaging of the Node runner as a desktop sidecar is not implemented, and the native release binary was not rebuilt in this task.
+
+## Verify
 
 ```powershell
 npm.cmd run typecheck
 npm.cmd run lint
-npm.cmd run build
-npx.cmd playwright install chromium
+npm.cmd run test:runner
 npm.cmd test
+npm.cmd run build
 npm.cmd run test:production
 npm.cmd run format:check
 ```
 
-Playwright starts the development server automatically and tests graph selection/keyboard navigation, pan/zoom, preference persistence, editable contracts, fixture honesty, evidence comparison, mission/timeline navigation, command search, panels/settings, all seven screens, and narrow-window behavior. Screenshots are written to the ignored `artifacts/` directory. A failure includes a screenshot and trace; open `playwright-report/index.html` or run `npx.cmd playwright show-report` to inspect it.
+The browser suite includes the complete new workflow and the existing seven-screen tests at `/legacy`. The runner suite checks schedule invariants, impossible schedules, file confinement, and provider-credential isolation. The new workflow tests verify real outcomes, both reorder controls, both candidates, snapshot preservation, exported patch applicability, independently executable downloaded tests, reload recovery, cancellation, and origin/token rejection. Production checks retain the earlier CSP/responsive checks and verify the new workspace under its browser CSP. Screenshots are saved under ignored `artifacts/`.
 
-`test:production` builds the frontend, serves it on port 1421, and applies the desktop CSP as a response header. It verifies all seven screens at widths of 1440, 900, and 390 pixels, checks panel overflow and runtime/CSP errors, and confirms that system reduced-motion preferences stop the graph animation. Assets are emitted as files so small fonts comply with the strict local-font policy.
+For a production browser preview, run `npm run build` followed by `npm run preview` and open **http://127.0.0.1:1421**. Run one dev/preview launcher at a time: both use the same runner port. Neither an OpenAI key nor any new npm dependency is required for the bundled workflow.
 
-Verified in this workspace: strict type checking, lint, formatting, production build, **10 interaction tests**, and **1 production CSP/responsive test** passed. The production check covered 21 screen/width combinations. The production dependency audit reported no known vulnerabilities. Native compilation remains unverified for the toolchain reasons above.
+## Structure
 
-Use `npm.cmd run format` to format source files. `npm.cmd run preview` serves the production frontend build. `npm.cmd run tauri -- info` reports native prerequisites. Native compilation requires the platform toolchain and is separate from the frontend checks above.
+```text
+src/features/agent/          Composer, conversation, browser evidence, timeline, patch drawer
+src/LegacyApp.tsx           Preserved Phase 1 UI at /legacy
+shared/                     Typed session contract and immutable behavior scenario
+runner/                     HTTP/SSE service, worktree engine, provider, browser harness
+fixtures/pickup-search/     Runnable React search application with the baseline bug
+scripts/                    Cross-platform development and fixture launchers
+tests/e2e/agent.spec.ts     Complete browser-to-runner integration flow
+tests/production/           Production CSP and responsive checks
+src-tauri/                  Preserved native shell and installed-toolchain work
+```
 
-## Implementation references
-
-The setup follows the official [Tauri + Vite integration](https://v2.tauri.app/start/frontend/vite/), [Tauri CSP guidance](https://v2.tauri.app/security/csp/), [Tailwind Vite integration](https://tailwindcss.com/docs/installation/using-vite), and [React Flow custom-node documentation](https://reactflow.dev/learn/customization/custom-nodes).
+Implementation follows the official [Playwright request interception documentation](https://playwright.dev/docs/network) and [OpenAI Responses function-calling documentation](https://developers.openai.com/api/docs/guides/function-calling).

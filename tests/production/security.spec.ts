@@ -19,7 +19,7 @@ test('production assets obey the desktop CSP across screens and window sizes', a
       headers: { ...response.headers(), 'content-security-policy': config.app.security.csp },
     })
   })
-  await page.goto('/')
+  await page.goto('/legacy')
   await expect(page.locator('.react-flow__node-future')).toHaveCount(3)
   await expect(page.locator('animateMotion')).toHaveCount(0)
   for (const width of [1440, 900, 390]) {
