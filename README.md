@@ -2,6 +2,8 @@
 
 A local coding-agent workspace. Open a Git checkout, describe a task, continue with follow-ups in an isolated worktree, review real build/test evidence, and export or explicitly apply the patch. The pickup-search investigation also provides an editable browser execution timeline for timing bugs.
 
+**Step 3:** Compare and Replay now works inside ordinary project sessions for local Chromium apps using HTTP fetch/XHR. See [the project replay guide](docs/step-3.md) for scenario configuration, keyboard/mouse controls, standalone exports, and the separate dashboard acceptance example. `/pickup` remains runnable.
+
 The main screen is the everyday coding workspace. The **pickup-address search race** remains accessible from its sample button or `/pickup`, with the existing two-candidate replay workflow. The earlier seven-screen foundation remains available at `/legacy`. Its native setup reference is preserved in [docs/phase-1-native.md](docs/phase-1-native.md).
 
 ## Launch
@@ -19,7 +21,7 @@ Open **http://127.0.0.1:1420**. On other shells, use `npm` / `npx` without `.cmd
 ## Everyday coding — Step 2
 
 1. Enter an existing local Git checkout root in **Local repository path** and click **Open repository**. The workspace shows its path, branch, exact HEAD, and whether local source edits will be included. The checkout needs an existing commit. Source credentials and ignored files are excluded.
-2. Enter a normal coding task and click **Start coding**. One implementation is the default. **Compare approaches** creates two independent candidate worktrees from the same baseline; deeper comparison and project replay polish remain later work.
+2. Enter a normal coding task and click **Start coding**. One implementation is the default. **Compare approaches** creates two independent candidate worktrees from the same baseline. For browser timing investigations, select **Investigate browser behavior** and configure the session's saved scenario before generating fixes.
 3. The agent reads repository `AGENTS.md` instructions (including inherited instructions), searches and reads source, creates/edits/deletes files, inspects the actual multi-file diff, and requests project commands. The conversation displays tool activity and streamed stdout/stderr. Provider credentials stay in the runner and are stripped from command environments.
 4. Every project command requires an explicit **Approve command** or **Skip command** decision. The panel shows the executable, exact arguments, working directory, and npm lifecycle scripts when applicable. Approval applies once. If source changes while approval is pending, the command is skipped and must be requested again. Commands run without shell interpolation and use the existing deadline/process-tree cancellation support. Worktrees are not an OS sandbox; approved commands execute project code.
 5. Send a **Follow-up instruction** after a turn ends. It uses the same candidate files, prior conversation, diff, and test evidence. No clean checkout replaces the earlier edits. A stopped/interrupted turn can be continued the same way.
@@ -136,7 +138,7 @@ Restart `npm run dev`, then select **Live agent** in the composer. Keys stay in 
 
 ## Scope and execution boundary
 
-The pickup investigation is a separate vertical slice: its selector registers the bundled repository, both modes use the immutable shared pickup checks, and live writes are restricted to its search hook. The everyday workspace adds general repository tools and explicit apply; arbitrary browser-harness discovery and project replay remain later work. General shell interpreters, browser video recording, and automatic patch application are not implemented.
+The pickup investigation remains a separate runnable example with its immutable shared checks and restricted live hook edits. The main workspace supports saved, explicitly configured local Chromium HTTP fetch/XHR scenarios, two-candidate replay, general repository tools, and explicit apply. Automatic interaction recording, general shell interpreters, browser video recording, remote/HTTPS replay, and automatic patch application are not implemented.
 
 The runner binds to loopback, validates request origins/hosts, requires a random local token on mutations, excludes credential files, and confines model file access to source in the candidate worktree. Browser replays block network traffic outside their fixture origin. Exported-test outputs are isolated from the repository's own test reports. These boundaries support trusted local development; detached Git worktrees are not an OS-level execution sandbox.
 

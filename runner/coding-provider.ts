@@ -16,6 +16,21 @@ const definition = (name: string, description: string, properties: Record<string
 })
 export const codingTools = [
   definition(
+    'propose_replay',
+    'Propose a browser scenario JSON string for user review; do not weaken a saved assertion.',
+    { scenario: string },
+  ),
+  definition(
+    'inspect_replay',
+    'Read the saved scenario and actual browser evidence, revisions, and request coverage.',
+    {},
+  ),
+  definition(
+    'run_replay',
+    'Run the saved scenario on this candidate; app start requires explicit command approval.',
+    { order: { type: 'array', items: string } },
+  ),
+  definition(
     'read_instructions',
     'Read applicable AGENTS.md instructions and the project command manifest.',
     {},
@@ -61,6 +76,7 @@ export async function runCodingProvider(options: {
   history: { role: 'user' | 'assistant'; content: string }[]
   turn: number
   candidate: string
+  candidateId?: string
   instructions: string
   signal: AbortSignal
   execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
@@ -74,9 +90,17 @@ export async function runCodingProvider(options: {
     const fixture = JSON.parse(
       await readFile(process.env.PARALLAX_TEST_PROVIDER_FILE!, 'utf8'),
     ) as {
-      turns: { calls: { name: string; args: Record<string, unknown> }[]; message: string }[]
+      turns: {
+        calls: { name: string; args: Record<string, unknown> }[]
+        message: string
+        candidates?: Record<
+          string,
+          { calls: { name: string; args: Record<string, unknown> }[]; message: string }
+        >
+      }[]
     }
-    const turn = fixture.turns[options.turn - 1]
+    const entry = fixture.turns[options.turn - 1]
+    const turn = entry?.candidates?.[options.candidateId ?? ''] ?? entry
     if (!turn)
       throw new Error(
         'The scripted test provider has no recipe for this follow-up. No model was called.',

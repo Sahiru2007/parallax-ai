@@ -1,4 +1,5 @@
 import type { ToolEvent } from './investigation.ts'
+import type { ProjectReplayState } from './project-replay.ts'
 
 export interface CodingRepo {
   id: string
@@ -47,6 +48,8 @@ export interface CodingSession {
   baseline: { revision: string; digest: string; dirty: boolean }
   provider: 'live' | 'test'
   compare: boolean
+  investigation?: boolean
+  projectReplay?: ProjectReplayState
   status: 'running' | 'ready' | 'interrupted' | 'cancelled' | 'error'
   activity: string
   busy: boolean

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Logo } from '../../components/ui'
 import { useCoding } from './useCoding'
+import { ProjectReplayPanel } from './ProjectReplayPanel'
 import './studio.css'
 import './coding.css'
 
@@ -10,6 +11,8 @@ export default function CodingWorkspace() {
   const [task, setTask] = useState('')
   const [followup, setFollowup] = useState('')
   const [compare, setCompare] = useState(false)
+  const [investigate, setInvestigate] = useState(false)
+  const [showReplay, setShowReplay] = useState(false)
   const [providerChoice, setProvider] = useState<'live' | 'test' | null>(null)
   const provider =
     providerChoice ?? (api.config?.testProvider && !api.config.live.configured ? 'test' : 'live')
@@ -26,7 +29,7 @@ export default function CodingWorkspace() {
   async function start() {
     setSending(true)
     try {
-      await api.start(task, provider, compare)
+      await api.start(task, provider, compare, investigate)
     } finally {
       setSending(false)
     }
@@ -138,6 +141,14 @@ export default function CodingWorkspace() {
                 />{' '}
                 Compare approaches
               </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={investigate}
+                  onChange={(e) => setInvestigate(e.target.checked)}
+                />{' '}
+                Investigate browser behavior
+              </label>
               <select
                 aria-label="Coding provider"
                 value={provider}
@@ -156,7 +167,7 @@ export default function CodingWorkspace() {
                 type="submit"
                 disabled={!api.repo || !task.trim() || sending}
               >
-                Start coding
+                {investigate ? 'Start investigation' : 'Start coding'}
               </button>
             </div>
           </form>
@@ -173,7 +184,9 @@ export default function CodingWorkspace() {
           </button>
         </main>
       ) : (
-        <main className="coding-session">
+        <main
+          className={`coding-session ${session.projectReplay?.runs.length ? 'has-project-replay' : ''}`}
+        >
           <aside className="coding-conversation">
             <div className="coding-session-header">
               <h1>{session.messages[0]?.content}</h1>
@@ -209,7 +222,11 @@ export default function CodingWorkspace() {
                 ))}
             </div>
             {session.approval && (
-              <section className="coding-approval" aria-label="Command approval">
+              <section
+                className="coding-approval"
+                aria-label="Command approval"
+                data-request-id={session.approval.id}
+              >
                 <strong>Approve project command</strong>
                 <pre>
                   {session.approval.executable}{' '}
@@ -249,107 +266,129 @@ export default function CodingWorkspace() {
             </form>
           </aside>
           <section className="coding-review" aria-label="Changes and checks">
-            <div className="coding-review-header">
-              <h2>Review implementation</h2>
-              <button disabled={session.busy} onClick={() => void api.review()}>
-                Refresh review
+            {showReplay || session.investigation || session.projectReplay ? (
+              <ProjectReplayPanel
+                key={session.id}
+                session={session}
+                api={api}
+                onVersion={(version) => {
+                  if (version !== 'baseline') setCandidate(version)
+                }}
+              />
+            ) : (
+              <button
+                className="project-add-replay"
+                disabled={session.busy}
+                onClick={() => setShowReplay(true)}
+              >
+                Add browser replay
               </button>
-            </div>
-            <div className="coding-candidates" role="tablist" aria-label="Coding implementations">
-              {session.candidates.map((item) => (
-                <button
-                  key={item.id}
-                  role="tab"
-                  aria-selected={candidate?.id === item.id}
-                  onClick={() => setCandidate(item.id)}
-                >
-                  {item.name} · {item.files.length} files
+            )}
+            <details className="project-code-review" open={!session.projectReplay?.runs.length}>
+              <summary>File changes, project checks, and apply</summary>
+              <div className="coding-review-header">
+                <h2>Review implementation</h2>
+                <button disabled={session.busy} onClick={() => void api.review()}>
+                  Refresh review
                 </button>
-              ))}
-            </div>
-            <div className="coding-file-review">
-              <nav aria-label="Changed files">
-                {candidate?.files.map((change) => (
+              </div>
+              <div className="coding-candidates" role="tablist" aria-label="Coding implementations">
+                {session.candidates.map((item) => (
                   <button
-                    aria-pressed={selectedFile?.path === change.path}
-                    key={change.path}
-                    onClick={() => setFile(change.path)}
+                    key={item.id}
+                    role="tab"
+                    aria-selected={candidate?.id === item.id}
+                    onClick={() => setCandidate(item.id)}
                   >
-                    {change.status} · {change.path}
+                    {item.name} · {item.files.length} files
                   </button>
                 ))}
-                {!candidate?.files.length && <p>No recorded changes yet.</p>}
-              </nav>
-              <div>
-                <h3>{selectedFile?.path ?? 'File diff'}</h3>
-                <pre className="coding-diff" aria-label="Selected file diff">
-                  {selectedFile?.patch ?? 'Actual changes appear as the agent edits its worktree.'}
-                </pre>
               </div>
-            </div>
-            <section className="coding-checks" aria-label="Project checks">
-              <h2>Build and test evidence</h2>
-              {session.checks
-                .filter((check) => check.candidate === candidate?.id)
-                .map((check) => (
-                  <details key={check.id} data-testid="coding-check">
-                    <summary>
-                      <strong>
-                        {check.digest !== candidate?.digest ? 'STALE · ' : ''}
-                        {check.status.toUpperCase()}
-                      </strong>{' '}
-                      · Turn {check.turn} · {check.command}
-                    </summary>
-                    <pre>
-                      {check.cwd}
-                      {'\n'}
-                      {check.output}
-                    </pre>
-                  </details>
-                ))}
-              {!session.checks.length && <p>No project checks have executed.</p>}
-            </section>
-            <div className="coding-apply">
-              <a
-                className="cut-primary"
-                href={
-                  candidate?.patch && !session.busy
-                    ? `/api/coding/sessions/${session.id}/patch/${candidate.id}`
-                    : undefined
-                }
-                aria-disabled={!candidate?.patch || session.busy}
-                download
-              >
-                Export patch
-              </a>
-              <label>
-                Apply target checkout
-                <input
-                  aria-label="Apply target checkout"
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value)}
-                />
-              </label>
-              <button
-                className="cut-primary"
-                disabled={session.busy || !candidate?.patch}
-                onClick={() => candidate && void api.apply(candidate.id, target)}
-              >
-                Apply to checkout
-              </button>
-              <p>
-                Checks use this candidate’s source digest. Applying checks HEAD and touched files
-                for conflicts and preserves the target index.
-              </p>
-              {session.applied && (
-                <p role="status">
-                  Applied to {session.applied.path} · {session.applied.digest.slice(0, 12)}
-                  {session.applied.digest !== candidate?.digest
-                    ? ' · candidate has changed since apply'
-                    : ''}
+              <div className="coding-file-review">
+                <nav aria-label="Changed files">
+                  {candidate?.files.map((change) => (
+                    <button
+                      aria-pressed={selectedFile?.path === change.path}
+                      key={change.path}
+                      onClick={() => setFile(change.path)}
+                    >
+                      {change.status} · {change.path}
+                    </button>
+                  ))}
+                  {!candidate?.files.length && <p>No recorded changes yet.</p>}
+                </nav>
+                <div>
+                  <h3>{selectedFile?.path ?? 'File diff'}</h3>
+                  <pre className="coding-diff" aria-label="Selected file diff">
+                    {selectedFile?.patch ??
+                      'Actual changes appear as the agent edits its worktree.'}
+                  </pre>
+                </div>
+              </div>
+              <section className="coding-checks" aria-label="Project checks">
+                <h2>Build and test evidence</h2>
+                {session.checks
+                  .filter((check) => check.candidate === candidate?.id)
+                  .map((check) => (
+                    <details key={check.id} data-testid="coding-check">
+                      <summary>
+                        <strong>
+                          {check.digest !== candidate?.digest ? 'STALE · ' : ''}
+                          {check.status.toUpperCase()}
+                        </strong>{' '}
+                        · Turn {check.turn} · {check.command}
+                      </summary>
+                      <pre>
+                        {check.cwd}
+                        {'\n'}
+                        {check.output}
+                      </pre>
+                    </details>
+                  ))}
+                {!session.checks.length && <p>No project checks have executed.</p>}
+              </section>
+              <div className="coding-apply">
+                <a
+                  className="cut-primary"
+                  href={
+                    candidate?.patch && !session.busy
+                      ? `/api/coding/sessions/${session.id}/patch/${candidate.id}`
+                      : undefined
+                  }
+                  aria-disabled={!candidate?.patch || session.busy}
+                  download
+                >
+                  Export patch
+                </a>
+                <label>
+                  Apply target checkout
+                  <input
+                    aria-label="Apply target checkout"
+                    value={target}
+                    onChange={(e) => setTarget(e.target.value)}
+                  />
+                </label>
+                <button
+                  className="cut-primary"
+                  disabled={session.busy || !candidate?.patch}
+                  onClick={() => candidate && void api.apply(candidate.id, target)}
+                >
+                  Apply to checkout
+                </button>
+                <p>
+                  Checks use this candidate’s source digest. Applying checks HEAD and touched files
+                  for conflicts and preserves the target index.
                 </p>
-              )}
-            </div>
+                {session.applied && (
+                  <p role="status">
+                    Applied to {session.applied.path} · {session.applied.digest.slice(0, 12)}
+                    {session.applied.digest !== candidate?.digest
+                      ? ' · candidate has changed since apply'
+                      : ''}
+                  </p>
+                )}
+              </div>
+            </details>
           </section>
         </main>
       )}

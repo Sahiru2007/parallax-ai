@@ -41,7 +41,7 @@ export function useCoding() {
         if (!active) return
         setConfig(next)
         token.current = next.token
-        setRepo(next.defaultRepo)
+        if (!current.current) setRepo(next.defaultRepo)
         setConnecting(false)
         await refreshHistory()
         const previous = localStorage.getItem('parallax-coding-session')
@@ -172,8 +172,18 @@ export function useCoding() {
         return null
       }
     },
-    start: (task: string, provider: 'live' | 'test', compare: boolean) =>
-      action('/api/coding/sessions', { path: repo?.path, task, provider, compare }, true),
+    start: (task: string, provider: 'live' | 'test', compare: boolean, investigate = false) =>
+      action(
+        '/api/coding/sessions',
+        { path: repo?.path, task, provider, compare, investigate },
+        true,
+      ),
+    saveScenario: (scenario: unknown) =>
+      action(`/api/coding/sessions/${session?.id}/replay/scenario`, { scenario }),
+    replayProject: (order: string[], version: string) =>
+      action(`/api/coding/sessions/${session?.id}/replay/run`, { order, version }),
+    generateFixes: () => action(`/api/coding/sessions/${session?.id}/replay/fixes`, {}),
+    proposeReplay: () => action(`/api/coding/sessions/${session?.id}/replay/propose`, {}),
     followup: (message: string) =>
       action(`/api/coding/sessions/${session?.id}/followup`, { message }),
     approve: (approved: boolean) =>

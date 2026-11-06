@@ -13,6 +13,7 @@ import type { Investigation } from '../shared/investigation.ts'
 import { CodingEngine } from './coding-engine.ts'
 import { inspectRepo } from './coding-files.ts'
 import { testProviderConfigured } from './coding-provider.ts'
+import { exportedProjectTest } from './project-replay-engine.ts'
 
 const root = resolve(
   process.env.PARALLAX_REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..'),
@@ -98,7 +99,7 @@ const server = createServer(async (request, response) => {
         throw new Error('Provide a repository path and a task under 8000 characters.')
       if (data.provider !== 'live' && data.provider !== 'test')
         throw new Error('Choose live or test provider.')
-      if (data.provider === 'live' && !providerState().configured)
+      if (data.provider === 'live' && !providerState().configured && data.investigate !== true)
         throw new Error(
           'Live provider not configured. Set OPENAI_API_KEY and PARALLAX_MODEL on the runner; no test-provider fallback is used.',
         )
@@ -107,13 +108,70 @@ const server = createServer(async (request, response) => {
       return json(
         response,
         201,
-        await coding.start(data.path, data.task.trim(), data.provider, data.compare === true),
+        await coding.start(
+          data.path,
+          data.task.trim(),
+          data.provider,
+          data.compare === true,
+          data.investigate === true,
+        ),
       )
     }
     const codingMatch = /^\/api\/coding\/sessions\/([a-f0-9-]{36})(?:\/(.*))?$/.exec(url.pathname)
     if (codingMatch) {
       const [, id, action] = codingMatch
       const state = coding.state(id)
+      if (request.method === 'POST' && action === 'replay/scenario') {
+        const data = await body(request)
+        return json(response, 200, await coding.saveReplay(id, data.scenario))
+      }
+      if (request.method === 'POST' && action === 'replay/run') {
+        if (engine.active()) throw new Error('Wait for the active pickup investigation to stop.')
+        const data = await body(request)
+        if (typeof data.version !== 'string') throw new Error('Select a replay version or all.')
+        return json(response, 202, await coding.replay(id, data.order, data.version))
+      }
+      if (request.method === 'POST' && action === 'replay/fixes') {
+        if (state.provider === 'live' && !providerState().configured)
+          throw new Error(
+            'Configure the live provider before generating fixes. Baseline replay remains available without a key.',
+          )
+        return json(response, 202, await coding.generateReplayFixes(id))
+      }
+      if (request.method === 'POST' && action === 'replay/propose') {
+        if (state.provider === 'live' && !providerState().configured)
+          throw new Error(
+            'Configure a provider to propose a scenario. You can configure and run one manually without a key.',
+          )
+        return json(response, 202, await coding.proposeReplay(id))
+      }
+      if (request.method === 'GET' && action === 'replay/export') {
+        const saved = state.projectReplay?.saved
+        if (!saved) throw new Error('Save a scenario before exporting a regression.')
+        const order = url.searchParams.get('order')?.split(',') ?? state.projectReplay!.order
+        const source = exportedProjectTest(saved, order)
+        response.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="parallax-regression.spec.ts"',
+          'Cache-Control': 'no-store',
+        })
+        response.end(source)
+        return
+      }
+      if (
+        request.method === 'GET' &&
+        /^replay\/frames\/[a-f0-9-]{36}-\d+\.png$/.test(action ?? '')
+      ) {
+        const runtime = coding.sessions.get(id)!
+        const png = await readFile(join(runtime.dir, 'replay-frames', action!.split('/')[2]))
+        response.writeHead(200, {
+          'Content-Type': 'image/png',
+          'Cache-Control': 'private, max-age=3600',
+          'X-Content-Type-Options': 'nosniff',
+        })
+        response.end(png)
+        return
+      }
       if (request.method === 'GET' && !action) return json(response, 200, state)
       if (request.method === 'GET' && action === 'events') {
         response.writeHead(200, {

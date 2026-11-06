@@ -1,10 +1,15 @@
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, writeFile, rename, rm, realpath } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile, rename, rm, realpath, lstat } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
-import type { CodingSession, CodingCandidate, CodingCheck } from '../shared/coding.ts'
+import type {
+  CodingSession,
+  CodingCandidate,
+  CodingCheck,
+  CommandApproval,
+} from '../shared/coding.ts'
 import type { ToolEvent } from '../shared/investigation.ts'
-import { command } from './process.ts'
+import { command, git } from './process.ts'
 import { createWorktree, safeRead } from './worktrees.ts'
 import {
   inspectRepo,
@@ -16,6 +21,8 @@ import {
   applyCandidate,
 } from './coding-files.ts'
 import { runCodingProvider } from './coding-provider.ts'
+import { runProjectBatch, saveScenario, type ReplayHost } from './project-replay-engine.ts'
+import { validateScenario, replayOrder } from '../shared/project-replay.ts'
 
 interface Runtime {
   state: CodingSession
@@ -25,6 +32,7 @@ interface Runtime {
   task?: Promise<void>
   baseline: Map<string, Buffer>
   approval?: (allow: boolean) => void
+  proposalOnly?: boolean
 }
 export class CodingEngine {
   base: string
@@ -48,6 +56,11 @@ export class CodingEngine {
           state.error =
             'This turn was interrupted. Your candidate edits and earlier evidence are retained. Send a follow-up to continue.'
           state.approval = undefined
+          for (const run of state.projectReplay?.runs ?? [])
+            if (run.status === 'running') {
+              run.status = 'cancelled'
+              run.error = 'Replay interrupted by runner restart; no completed assertion.'
+            }
           for (const check of state.checks.filter((c) => c.status === 'running')) {
             check.status = 'skipped'
             check.output += '\nInterrupted by runner restart; not verified.'
@@ -112,7 +125,13 @@ export class CodingEngine {
       })
     await runtime.persistence
   }
-  async start(path: string, task: string, provider: 'live' | 'test', compare: boolean) {
+  async start(
+    path: string,
+    task: string,
+    provider: 'live' | 'test',
+    compare: boolean,
+    investigation = false,
+  ) {
     if (this.active()) throw new Error('Wait for the active coding turn to stop.')
     const repo = await inspectRepo(path)
     const snapshot = await sourceSnapshot(repo.path)
@@ -127,6 +146,7 @@ export class CodingEngine {
       baseline: { revision: snapshot.revision, digest: snapshot.digest, dirty: snapshot.dirty },
       provider,
       compare,
+      investigation,
       status: 'running',
       activity: 'Preparing isolated worktree',
       busy: true,
@@ -172,7 +192,13 @@ export class CodingEngine {
             linkDependencies: false,
           })
         }
-        await this.turn(runtime)
+        if (investigation) {
+          state.busy = false
+          state.status = 'ready'
+          state.activity = 'Investigation ready — configure and save a replay scenario'
+          this.changed(runtime)
+          await this.persist(runtime)
+        } else await this.turn(runtime)
       })().catch((error) => this.failed(runtime, error))
     } catch (error) {
       await this.failed(runtime, error)
@@ -234,6 +260,8 @@ export class CodingEngine {
       )}`
       instructions +=
         '\nDependency directories are not linked to the original checkout. If needed, request approval to install dependencies into this worktree.'
+      if (state.projectReplay?.saved)
+        instructions += `\nSaved browser scenario (immutable fixtures/assertion): ${JSON.stringify(state.projectReplay.saved)}\nActual replay evidence: ${JSON.stringify(state.projectReplay.runs.slice(-9))}\nUse run_replay to test your current candidate against the saved scenario. Propose changes with propose_replay for user review; never weaken the assertion to claim a fix. Request cancellation or altered request counts produce coverage differences, not equivalent verification.`
       if (state.compare)
         instructions += `\nCompare approaches is enabled. Use a materially distinct approach for ${candidate.name}. ${candidate.id === 'b' ? `Approach A patch for reference:\n${state.candidates[0].patch}` : ''}`
       await runCodingProvider({
@@ -244,6 +272,7 @@ export class CodingEngine {
           .map(({ role, content }) => ({ role, content })),
         turn: state.turn,
         candidate: candidate.name,
+        candidateId: candidate.id,
         instructions,
         signal: runtime.abort.signal,
         onText: (text) => {
@@ -294,6 +323,28 @@ export class CodingEngine {
   ): Promise<unknown> {
     runtime.abort.signal.throwIfAborted()
     const root = candidate.worktree
+    if (
+      runtime.proposalOnly &&
+      ['write_file', 'delete_file', 'run_command', 'run_replay'].includes(name)
+    )
+      throw new Error(
+        'Scenario proposal is read-only. Return propose_replay for user review before changing code or running commands.',
+      )
+    if (name === 'propose_replay') {
+      const scenario = validateScenario(JSON.parse(String(args.scenario)))
+      runtime.state.projectReplay ??= { order: [], orderRevision: 0, runs: [] }
+      runtime.state.projectReplay.proposal = scenario
+      this.log(
+        runtime,
+        'agent',
+        'Replay scenario proposed — review before saving',
+        JSON.stringify(scenario, null, 2),
+      )
+      return { proposed: true, requiresUserReview: true }
+    }
+    if (name === 'inspect_replay') return runtime.state.projectReplay ?? { runs: [] }
+    if (name === 'run_replay')
+      return runProjectBatch(this.replayHost(runtime), [candidate.id], args.order)
     if (name === 'read_instructions') return this.instructions(runtime, candidate)
     if (name === 'list_files' || name === 'search_files') {
       const snapshot = await sourceSnapshot(root, runtime.abort.signal)
@@ -384,29 +435,8 @@ export class CodingEngine {
       cwd,
       detail,
     }
-    runtime.state.approval = request
     const approvedDigest = candidate.digest
-    runtime.state.activity = 'Waiting for command approval'
-    const allowed = new Promise<boolean>((resolve, reject) => {
-      const abort = () => {
-        runtime.approval = undefined
-        reject(new Error('Turn cancelled while waiting for approval.'))
-      }
-      runtime.approval = (allow) => {
-        runtime.abort.signal.removeEventListener('abort', abort)
-        runtime.approval = undefined
-        resolve(allow)
-      }
-      runtime.abort.signal.addEventListener('abort', abort, { once: true })
-    })
-    this.log(
-      runtime,
-      'command',
-      'Approval required',
-      `${request.executable} ${request.args.join(' ')}\ncwd: ${cwd}\n${detail}`,
-    )
-    const approved = await allowed
-    runtime.state.approval = undefined
+    const approved = await this.askApproval(runtime, request)
     const check: CodingCheck = {
       id: request.id,
       candidate: candidate.id,
@@ -469,12 +499,208 @@ export class CodingEngine {
       throw new Error('This command approval is no longer pending.')
     runtime.approval(allow)
   }
-  async followup(id: string, message: string) {
+  async askApproval(runtime: Runtime, request: CommandApproval) {
+    runtime.abort.signal.throwIfAborted()
+    runtime.state.approval = request
+    runtime.state.activity = 'Waiting for command approval'
+    const allowed = new Promise<boolean>((resolve, reject) => {
+      const abort = () => {
+        runtime.approval = undefined
+        reject(new Error('Turn cancelled while waiting for approval.'))
+      }
+      runtime.approval = (allow) => {
+        runtime.abort.signal.removeEventListener('abort', abort)
+        runtime.approval = undefined
+        resolve(allow)
+      }
+      runtime.abort.signal.addEventListener('abort', abort, { once: true })
+    })
+    this.log(
+      runtime,
+      'command',
+      'Approval required',
+      `${request.executable} ${request.args.join(' ')}\ncwd: ${request.cwd}\n${request.detail}`,
+    )
+    try {
+      return await allowed
+    } finally {
+      runtime.state.approval = undefined
+      this.changed(runtime)
+    }
+  }
+  async replaySource(runtime: Runtime, version: string) {
+    if (version === 'baseline') {
+      const target = join(runtime.dir, 'worktrees/baseline')
+      if (!(await lstat(join(target, '.git')).catch(() => null))) {
+        const headFiles = (
+          await git(
+            runtime.state.repo.path,
+            ['ls-tree', '-r', '--name-only', '-z', runtime.state.baseline.revision],
+            runtime.abort.signal,
+          )
+        )
+          .split(String.fromCharCode(0))
+          .filter(Boolean)
+        this.log(runtime, 'worktree', 'Creating replay Baseline', target)
+        await createWorktree(
+          runtime.state.repo.path,
+          target,
+          {
+            revision: runtime.state.baseline.revision,
+            dirty: runtime.state.baseline.dirty,
+            digest: runtime.state.baseline.digest,
+            files: runtime.baseline,
+            headFiles,
+          },
+          runtime.abort.signal,
+          { linkDependencies: false },
+        )
+      }
+      const current = await sourceSnapshot(target, runtime.abort.signal)
+      if (current.digest !== runtime.state.baseline.digest)
+        throw new Error(
+          'Baseline worktree no longer matches the captured source. Start a fresh investigation to avoid testing a modified baseline.',
+        )
+      runtime.state.projectReplay!.baselineWorktree = target
+      return { worktree: target, digest: current.digest }
+    }
+    const candidate = runtime.state.candidates.find((c) => c.id === version)
+    if (!candidate) throw new Error('Unknown replay implementation.')
+    await this.refresh(runtime, candidate)
+    return { worktree: candidate.worktree, digest: candidate.digest }
+  }
+  replayHost(runtime: Runtime): ReplayHost {
+    return {
+      state: runtime.state,
+      dir: runtime.dir,
+      signal: runtime.abort.signal,
+      changed: () => this.changed(runtime),
+      log: (title, detail) => this.log(runtime, 'check', title, detail),
+      source: (version) => this.replaySource(runtime, version),
+      approve: (request) => this.askApproval(runtime, { ...request, id: randomUUID() }),
+    }
+  }
+  async saveReplay(id: string, scenario: unknown) {
+    const runtime = this.sessions.get(id)
+    if (!runtime) throw new Error('Coding session not found.')
+    const saved = saveScenario(runtime.state, scenario)
+    this.log(
+      runtime,
+      'user',
+      `Saved replay scenario r${saved.revision}`,
+      `${saved.scenario.name}\nSHA256 ${saved.digest}`,
+    )
+    await this.persist(runtime)
+    return runtime.state
+  }
+  async replay(id: string, order: unknown, version: string) {
+    const runtime = this.sessions.get(id)
+    if (!runtime) throw new Error('Coding session not found.')
+    if (this.active()) throw new Error('Wait for active tools to stop before replaying.')
+    const scenario = runtime.state.projectReplay?.saved?.scenario
+    if (!scenario) throw new Error('Save a replay scenario first.')
+    replayOrder(
+      order,
+      scenario.requests.map((r) => r.id),
+    )
+    const versions =
+      version === 'all' ? ['baseline', ...runtime.state.candidates.map((c) => c.id)] : [version]
+    if (versions.some((v) => v !== 'baseline' && !runtime.state.candidates.some((c) => c.id === v)))
+      throw new Error('Unknown replay implementation.')
+    runtime.abort = new AbortController()
+    runtime.state.busy = true
+    runtime.state.status = 'running'
+    runtime.state.error = undefined
+    runtime.state.activity = 'Preparing real browser replay'
+    this.changed(runtime)
+    await this.persist(runtime)
+    runtime.task = (async () => {
+      await runProjectBatch(this.replayHost(runtime), versions, order)
+      runtime.state.busy = false
+      runtime.state.status = 'ready'
+      runtime.state.activity = 'Replay complete — inspect recorded evidence'
+      this.changed(runtime)
+      await this.persist(runtime)
+    })().catch((error) => this.failed(runtime, error))
+    return runtime.state
+  }
+  async generateReplayFixes(id: string) {
+    const runtime = this.sessions.get(id)
+    if (!runtime) throw new Error('Coding session not found.')
+    if (this.active()) throw new Error('Wait for active tools to finish.')
+    if (
+      !runtime.state.projectReplay?.runs.some(
+        (run) =>
+          run.version === 'baseline' &&
+          run.scenarioDigest === runtime.state.projectReplay?.saved?.digest &&
+          run.orderRevision === runtime.state.projectReplay.orderRevision &&
+          run.sourceDigest === runtime.state.baseline.digest &&
+          (run.status === 'passed' || run.status === 'failed'),
+      )
+    )
+      throw new Error('Run the saved scenario on Baseline before generating fixes.')
+    const saved = runtime.state.projectReplay.saved!
+    const message =
+      'Implement two materially different fixes for the original task. Keep the saved browser actions, fixtures and assertion unchanged. Scenario: ' +
+      JSON.stringify(saved.scenario) +
+      '. Use the actual Baseline evidence, request applicable checks, and inspect the patch.'
+    runtime.state.compare = true
+    runtime.state.candidates[0].name = 'Candidate A'
+    let prepare: (() => Promise<void>) | undefined
+    if (!runtime.state.candidates.some((c) => c.id === 'b')) {
+      const candidate: CodingCandidate = {
+        id: 'b',
+        name: 'Candidate B',
+        worktree: join(runtime.dir, 'worktrees/b'),
+        digest: runtime.state.baseline.digest,
+        files: [],
+        patch: '',
+      }
+      runtime.state.candidates.push(candidate)
+      prepare = async () => {
+        const headFiles = (
+          await git(
+            runtime.state.repo.path,
+            ['ls-tree', '-r', '--name-only', '-z', runtime.state.baseline.revision],
+            runtime.abort.signal,
+          )
+        )
+          .split(String.fromCharCode(0))
+          .filter(Boolean)
+        await createWorktree(
+          runtime.state.repo.path,
+          candidate.worktree,
+          {
+            revision: runtime.state.baseline.revision,
+            dirty: runtime.state.baseline.dirty,
+            digest: runtime.state.baseline.digest,
+            files: runtime.baseline,
+            headFiles,
+          },
+          runtime.abort.signal,
+          { linkDependencies: false },
+        )
+      }
+    } else runtime.state.candidates[1].name = 'Candidate B'
+    await this.followup(id, message, prepare)
+    return runtime.state
+  }
+  async proposeReplay(id: string) {
+    await this.followup(
+      id,
+      'Read the app entry point, repository instructions and package scripts. Propose a local Chromium fetch/XHR replay scenario using propose_replay. Include executable/argv/cwd, local origin with {PORT}, page/readiness paths, fixed click/fill/select actions with gate IDs, exact URL/method/optional body request fixtures, response order, DOM text assertion, settleMs and timeoutMs. This request is read-only: do not edit files or run commands. The user will review, change, and save the proposal.',
+      undefined,
+      true,
+    )
+    return this.state(id)
+  }
+  async followup(id: string, message: string, prepare?: () => Promise<void>, proposalOnly = false) {
     const runtime = this.sessions.get(id)
     if (!runtime) throw new Error('Coding session not found.')
     if (this.active()) throw new Error('Wait for the active turn to stop before continuing.')
     runtime.abort = new AbortController()
     runtime.state.turn++
+    runtime.proposalOnly = proposalOnly
     runtime.state.busy = true
     runtime.state.status = 'running'
     runtime.state.error = undefined
@@ -482,7 +708,14 @@ export class CodingEngine {
     runtime.state.messages.push({ role: 'user', content: message, turn: runtime.state.turn })
     this.log(runtime, 'user', message)
     await this.persist(runtime)
-    runtime.task = this.turn(runtime).catch((error) => this.failed(runtime, error))
+    runtime.task = (async () => {
+      await prepare?.()
+      await this.turn(runtime)
+    })()
+      .catch((error) => this.failed(runtime, error))
+      .finally(() => {
+        runtime.proposalOnly = false
+      })
   }
   cancel(id: string) {
     const runtime = this.sessions.get(id)
