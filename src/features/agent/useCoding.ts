@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CodingConfig, CodingRepo, CodingSession } from '../../../shared/coding'
+import type { ProviderSettings } from '../../../shared/providers'
 
 export function useCoding() {
   const [config, setConfig] = useState<CodingConfig | null>(null)
@@ -10,6 +11,7 @@ export function useCoding() {
   const [connecting, setConnecting] = useState(true)
   const current = useRef<string | null>(null)
   const token = useRef('')
+  const hasConfig = config !== null
   const accept = useCallback((state: CodingSession, activate = false) => {
     if (activate) {
       current.current = state.id
@@ -33,30 +35,82 @@ export function useCoding() {
   )
   useEffect(() => {
     let active = true
-    void (async () => {
+    let retry: ReturnType<typeof setTimeout> | undefined
+    async function initialize() {
       try {
-        const response = await fetch('/api/coding/config')
+        const response = await fetch('/api/coding/config', { signal: AbortSignal.timeout(1500) })
         if (!response.ok) throw new Error('Start the local runner with npm run dev.')
         const next = (await response.json()) as CodingConfig
         if (!active) return
-        setConfig(next)
         token.current = next.token
         if (!current.current) setRepo(next.defaultRepo)
-        setConnecting(false)
         await refreshHistory()
         const previous = localStorage.getItem('parallax-coding-session')
-        if (previous && !current.current && active) await open(previous)
-      } catch (problem) {
+        if (previous && !current.current && active)
+          await open(previous).catch(() => {
+            localStorage.removeItem('parallax-coding-session')
+          })
+        const selectedPath = localStorage.getItem('parallax-repo-path')
+        if (!current.current && selectedPath && selectedPath !== next.defaultRepo?.path) {
+          const restored = await fetch('/api/coding/repos', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Parallax-Token': next.token },
+            body: JSON.stringify({ path: selectedPath }),
+          })
+          if (active && !current.current) {
+            if (restored.ok) setRepo((await restored.json()) as CodingRepo)
+            else {
+              setRepo(null)
+              setError(
+                'The previously selected repository is unavailable. Open a valid checkout before starting a task.',
+              )
+            }
+          }
+        }
         if (active) {
-          setError(String(problem))
+          setConfig(next)
           setConnecting(false)
         }
+      } catch {
+        if (active) {
+          setConnecting(true)
+          retry = setTimeout(() => void initialize(), 500)
+        }
       }
-    })()
+    }
+    void initialize()
     return () => {
       active = false
+      clearTimeout(retry)
     }
   }, [open, refreshHistory])
+  useEffect(() => {
+    if (session?.id || !hasConfig) return
+    let active = true,
+      checking = false
+    const timer = window.setInterval(async () => {
+      if (checking) return
+      checking = true
+      try {
+        const response = await fetch('/api/coding/config', { signal: AbortSignal.timeout(1500) })
+        if (!response.ok) throw new Error('Runner unavailable')
+        const next = (await response.json()) as CodingConfig
+        if (active && !current.current) {
+          token.current = next.token
+          setConfig(next)
+          setConnecting(false)
+        }
+      } catch {
+        if (active) setConnecting(true)
+      } finally {
+        checking = false
+      }
+    }, 1000)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [session?.id, hasConfig])
   useEffect(() => {
     if (!session?.id) return
     let active = true
@@ -160,6 +214,17 @@ export function useCoding() {
     error,
     connecting,
     open,
+    configureProvider: async (data: Record<string, unknown>) => {
+      const response = await fetch('/api/providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Parallax-Token': token.current },
+        body: JSON.stringify(data),
+      })
+      const result = (await response.json()) as ProviderSettings & { error?: string }
+      if (!response.ok) throw new Error(result.error ?? 'Provider settings failed.')
+      setConfig((old) => (old ? { ...old, providers: result } : old))
+      return result
+    },
     openRepo: async (path: string) => {
       setError('')
       try {
@@ -175,7 +240,14 @@ export function useCoding() {
     start: (task: string, provider: 'live' | 'test', compare: boolean, investigate = false) =>
       action(
         '/api/coding/sessions',
-        { path: repo?.path, task, provider, compare, investigate },
+        {
+          path: repo?.path,
+          task,
+          provider,
+          compare,
+          investigate,
+          modelSelection: config?.providers?.selection,
+        },
         true,
       ),
     saveScenario: (scenario: unknown) =>

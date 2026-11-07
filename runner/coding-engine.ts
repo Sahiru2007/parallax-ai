@@ -23,6 +23,8 @@ import {
 import { runCodingProvider } from './coding-provider.ts'
 import { runProjectBatch, saveScenario, type ReplayHost } from './project-replay-engine.ts'
 import { validateScenario, replayOrder } from '../shared/project-replay.ts'
+import type { ModelSelection } from '../shared/providers.ts'
+import type { ProviderSettingsStore } from './provider-settings.ts'
 
 interface Runtime {
   state: CodingSession
@@ -36,10 +38,12 @@ interface Runtime {
 }
 export class CodingEngine {
   base: string
+  providers?: ProviderSettingsStore
   sessions = new Map<string, Runtime>()
   updates = new EventEmitter()
-  constructor(base: string) {
+  constructor(base: string, providers?: ProviderSettingsStore) {
     this.base = base
+    this.providers = providers
   }
   async restore() {
     await mkdir(this.base, { recursive: true })
@@ -61,6 +65,8 @@ export class CodingEngine {
               run.status = 'cancelled'
               run.error = 'Replay interrupted by runner restart; no completed assertion.'
             }
+          for (const run of state.providerRuns ?? [])
+            if (run.status === 'running') run.status = 'interrupted'
           for (const check of state.checks.filter((c) => c.status === 'running')) {
             check.status = 'skipped'
             check.output += '\nInterrupted by runner restart; not verified.'
@@ -131,6 +137,7 @@ export class CodingEngine {
     provider: 'live' | 'test',
     compare: boolean,
     investigation = false,
+    modelSelection?: ModelSelection,
   ) {
     if (this.active()) throw new Error('Wait for the active coding turn to stop.')
     const repo = await inspectRepo(path)
@@ -145,6 +152,8 @@ export class CodingEngine {
       repo,
       baseline: { revision: snapshot.revision, digest: snapshot.digest, dirty: snapshot.dirty },
       provider,
+      modelSelection: modelSelection ? structuredClone(modelSelection) : undefined,
+      providerRuns: [],
       compare,
       investigation,
       status: 'running',
@@ -264,7 +273,37 @@ export class CodingEngine {
         instructions += `\nSaved browser scenario (immutable fixtures/assertion): ${JSON.stringify(state.projectReplay.saved)}\nActual replay evidence: ${JSON.stringify(state.projectReplay.runs.slice(-9))}\nUse run_replay to test your current candidate against the saved scenario. Propose changes with propose_replay for user review; never weaken the assertion to claim a fix. Request cancellation or altered request counts produce coverage differences, not equivalent verification.`
       if (state.compare)
         instructions += `\nCompare approaches is enabled. Use a materially distinct approach for ${candidate.name}. ${candidate.id === 'b' ? `Approach A patch for reference:\n${state.candidates[0].patch}` : ''}`
+      const selection = state.modelSelection
+      if (state.provider === 'live' && selection && this.providers)
+        this.providers.assertReady(selection)
+      const providerRun =
+        selection && state.provider === 'live'
+          ? {
+              ...selection,
+              id: randomUUID(),
+              turn: state.turn,
+              candidate: candidate.id,
+              startedAt: new Date().toISOString(),
+              status: 'running' as const,
+            }
+          : undefined
+      if (providerRun) {
+        state.providerRuns ??= []
+        state.providerRuns.push(providerRun)
+      }
+      const recorded = state.providerRuns?.at(-1)
+      const apiKey =
+        selection?.provider === 'openai' && this.providers ? await this.providers.key() : undefined
       await runCodingProvider({
+        selection,
+        apiKey,
+        baseURL: this.providers?.openaiBase,
+        onModel: (model) => {
+          if (recorded) {
+            recorded.actualModel = model
+            this.changed(runtime)
+          }
+        },
         mode: state.provider,
         task: state.messages.filter((m) => m.role === 'user').at(-1)!.content,
         history: state.messages
@@ -285,7 +324,15 @@ export class CodingEngine {
           )
         },
         execute: (name, args) => this.tool(runtime, candidate, name, args),
-      })
+      }).then(
+        () => {
+          if (recorded) recorded.status = 'completed'
+        },
+        (error) => {
+          if (recorded) recorded.status = 'failed'
+          throw error
+        },
+      )
       await this.refresh(runtime, candidate)
       for (const kind of ['build', 'test'])
         if (
@@ -726,6 +773,8 @@ export class CodingEngine {
     this.changed(runtime)
   }
   async failed(runtime: Runtime, error: unknown) {
+    for (const run of runtime.state.providerRuns ?? [])
+      if (run.status === 'running') run.status = 'failed'
     for (const candidate of runtime.state.candidates)
       await this.refresh(runtime, candidate, true).catch(() => {})
     runtime.state.busy = false

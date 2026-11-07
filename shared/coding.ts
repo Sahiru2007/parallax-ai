@@ -1,5 +1,6 @@
 import type { ToolEvent } from './investigation.ts'
 import type { ProjectReplayState } from './project-replay.ts'
+import type { ModelSelection, ProviderRun, ProviderSettings } from './providers.ts'
 
 export interface CodingRepo {
   id: string
@@ -47,6 +48,8 @@ export interface CodingSession {
   repo: CodingRepo
   baseline: { revision: string; digest: string; dirty: boolean }
   provider: 'live' | 'test'
+  modelSelection?: ModelSelection
+  providerRuns?: ProviderRun[]
   compare: boolean
   investigation?: boolean
   projectReplay?: ProjectReplayState
@@ -68,4 +71,5 @@ export interface CodingConfig {
   live: { configured: boolean; provider: string; model: string | null }
   testProvider: boolean
   defaultRepo: CodingRepo | null
+  providers?: ProviderSettings
 }

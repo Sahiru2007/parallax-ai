@@ -1,3 +1,4 @@
+import { rememberSecret, redactSecrets } from './provider-secrets.ts'
 interface FunctionCall {
   type: 'function_call'
   call_id: string
@@ -9,6 +10,7 @@ interface Message {
   content: { type: string; text?: string }[]
 }
 interface ResponseOutput {
+  model?: string
   output: (FunctionCall | Message | { type: string })[]
   error?: { message: string }
 }
@@ -76,8 +78,15 @@ export async function runLiveAgent(options: {
   tools?: unknown[]
   history?: { role: 'user' | 'assistant'; content: string }[]
   maxTurns?: number
+  model?: string
+  apiKey?: string
+  baseURL?: string
+  onModel?: (model: string) => void
 }) {
-  if (!providerState().configured)
+  const model = options.model ?? process.env.PARALLAX_MODEL
+  const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY
+  rememberSecret(apiKey)
+  if (!model || !apiKey)
     throw new Error(
       'Live mode requires OPENAI_API_KEY and PARALLAX_MODEL in the runner environment. No prewritten fallback was used.',
     )
@@ -90,15 +99,16 @@ export async function runLiveAgent(options: {
     for (const text of steering.slice(steeringCount))
       input.push({ role: 'user', content: `Developer steering: ${text}` })
     steeringCount = steering.length
-    const response = await fetch('https://api.openai.com/v1/responses', {
+    const response = await fetch((options.baseURL ?? 'https://api.openai.com/v1') + '/responses', {
       method: 'POST',
+      redirect: 'error',
       signal: AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]),
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.PARALLAX_MODEL,
+        model,
         include: ['reasoning.encrypted_content'],
         max_output_tokens: 8192,
         store: false,
@@ -115,7 +125,8 @@ export async function runLiveAgent(options: {
       )
     const payload = (await response.json()) as ResponseOutput
     if (payload.error || !Array.isArray(payload.output))
-      throw new Error(payload.error?.message ?? 'Invalid provider response.')
+      throw new Error('Invalid provider response from OpenAI. Check model access and retry.')
+    if (payload.model) options.onModel?.(payload.model)
     // Replay all output items, including reasoning, to preserve stateless tool-call context.
     input.push(...payload.output)
     const calls = payload.output.filter(
@@ -123,7 +134,8 @@ export async function runLiveAgent(options: {
     )
     for (const item of payload.output) {
       if (item.type === 'message' && 'content' in item) {
-        for (const content of item.content) if (content.text) options.onText(content.text)
+        for (const content of item.content)
+          if (content.text) options.onText(redactSecrets(content.text))
       }
     }
     if (!calls.length) return
@@ -132,7 +144,7 @@ export async function runLiveAgent(options: {
       try {
         result = await options.execute(
           call.name,
-          JSON.parse(call.arguments) as Record<string, unknown>,
+          JSON.parse(redactSecrets(call.arguments)) as Record<string, unknown>,
         )
       } catch (error) {
         options.signal.throwIfAborted()

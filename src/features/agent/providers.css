@@ -1,0 +1,101 @@
+.provider-settings::backdrop {
+  background: #10120fcc;
+}
+.provider-settings {
+  width: min(760px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 24px;
+  background: #20241b;
+  color: #e0ddcc;
+  border: 1px solid #737b4e;
+  box-shadow: 0 16px 80px #0008;
+}
+.provider-settings header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.provider-settings p {
+  margin: 14px 0;
+  line-height: 1.5;
+}
+.provider-settings button,
+.provider-settings input,
+.provider-settings select {
+  font: inherit;
+  border: 1px solid #666c46;
+  border-radius: 3px;
+  padding: 9px 12px;
+  color: inherit;
+  background: #2b3023;
+}
+.provider-settings button {
+  margin: 6px 8px 6px 0;
+  cursor: pointer;
+}
+.provider-settings button[aria-selected='true'] {
+  border-color: #d0b16e;
+  background: #44452b;
+}
+.provider-settings button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.provider-settings label {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+.provider-settings input,
+.provider-settings select {
+  width: 100%;
+  min-width: 0;
+}
+.provider-settings form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+.provider-success {
+  color: #bbce91;
+}
+.provider-failure {
+  color: #f2b694;
+}
+.provider-test-label {
+  border: 1px solid #cbb072;
+  padding: 8px;
+  color: #edd590;
+}
+.provider-welcome {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.provider-welcome button {
+  border: 1px solid #7a8053;
+  padding: 10px 16px;
+  background: #2b3023;
+  color: #d8c28e;
+  cursor: pointer;
+}
+.provider-model-label {
+  color: #d8c28e;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 650px) {
+  .provider-overlay {
+    padding: 8px;
+  }
+  .provider-settings {
+    padding: 15px;
+  }
+  .provider-settings form {
+    grid-template-columns: 1fr;
+  }
+}

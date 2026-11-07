@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Logo } from '../../components/ui'
 import { useCoding } from './useCoding'
 import { ProjectReplayPanel } from './ProjectReplayPanel'
+import { ProviderSettingsPanel } from './ProviderSettingsPanel'
+import type { ProviderId } from '../../../shared/providers'
 import './studio.css'
 import './coding.css'
 
@@ -14,12 +16,18 @@ export default function CodingWorkspace() {
   const [investigate, setInvestigate] = useState(false)
   const [showReplay, setShowReplay] = useState(false)
   const [providerChoice, setProvider] = useState<'live' | 'test' | null>(null)
+  const [manage, setManage] = useState<ProviderId | null>(null)
+  const [modelError, setModelError] = useState('')
+  const settings = api.config?.providers
+  const selection = settings?.selection
   const provider =
-    providerChoice ?? (api.config?.testProvider && !api.config.live.configured ? 'test' : 'live')
+    providerChoice ??
+    (api.config?.testProvider && !selection && !api.config.live.configured ? 'test' : 'live')
   const [candidateId, setCandidate] = useState('a')
   const [file, setFile] = useState('')
   const [targetChoice, setTarget] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
+  const [openingRepo, setOpeningRepo] = useState(false)
   const session = api.session
   const candidate = session?.candidates.find((c) => c.id === candidateId) ?? session?.candidates[0]
   const selectedFile =
@@ -60,6 +68,12 @@ export default function CodingWorkspace() {
         </span>
         <a href="/pickup">Pickup investigation</a>
         <a href="/legacy">Design archive</a>
+        <button
+          disabled={!api.config || api.connecting}
+          onClick={() => setManage(selection?.provider ?? 'openai')}
+        >
+          Manage providers
+        </button>
       </header>
       {api.error && (
         <div className="cut-error" role="alert">
@@ -90,12 +104,26 @@ export default function CodingWorkspace() {
         <main className="coding-entry">
           <h1>What should we build?</h1>
           <p>One task. An isolated implementation. Evidence you can review.</p>
+          {!selection && (
+            <div className="provider-welcome" aria-label="Connect a provider">
+              <button disabled={!api.config || api.connecting} onClick={() => setManage('openai')}>
+                Connect OpenAI
+              </button>
+              <button disabled={!api.config || api.connecting} onClick={() => setManage('ollama')}>
+                Connect Ollama
+              </button>
+              <button onClick={() => window.location.assign('/pickup')}>
+                Try the demo · no model
+              </button>
+            </div>
+          )}
           <form
             className="coding-repo-form"
             onSubmit={(e) => {
               e.preventDefault()
               setTarget(null)
-              void api.openRepo(repoPath)
+              setOpeningRepo(true)
+              void api.openRepo(repoPath).finally(() => setOpeningRepo(false))
             }}
           >
             <input
@@ -104,7 +132,9 @@ export default function CodingWorkspace() {
               onChange={(e) => setPath(e.target.value)}
               placeholder="E:\projects\your-repository"
             />
-            <button type="submit">Open repository</button>
+            <button type="submit" disabled={openingRepo || api.connecting}>
+              Open repository
+            </button>
           </form>
           {api.repo && (
             <div className="coding-baseline">
@@ -151,29 +181,81 @@ export default function CodingWorkspace() {
               </label>
               <select
                 aria-label="Coding provider"
-                value={provider}
-                onChange={(e) => setProvider(e.target.value as 'live' | 'test')}
+                disabled={!api.config || api.connecting || sending}
+                value={
+                  provider === 'test'
+                    ? 'test'
+                    : selection
+                      ? `${selection.provider}:${selection.model}`
+                      : 'live'
+                }
+                onChange={(e) => {
+                  const value = e.target.value
+                  if (value === 'manage') {
+                    setManage(selection?.provider ?? 'openai')
+                    return
+                  }
+                  if (value === 'test' || value === 'live') {
+                    setProvider(value)
+                    return
+                  }
+                  const index = value.indexOf(':')
+                  setSending(true)
+                  setModelError('')
+                  void api
+                    .configureProvider({
+                      action: 'select',
+                      provider: value.slice(0, index),
+                      model: value.slice(index + 1),
+                    })
+                    .then(() => setProvider('live'))
+                    .catch((error: unknown) =>
+                      setModelError(
+                        error instanceof Error ? error.message : 'Model selection failed.',
+                      ),
+                    )
+                    .finally(() => setSending(false))
+                }}
               >
-                <option value="live">
-                  Live provider ·{' '}
-                  {api.config?.live.configured ? api.config.live.model : 'not configured'}
-                </option>
+                {!selection && <option value="live">Choose a provider and model…</option>}
+                {(['openai', 'ollama'] as const).flatMap((id) => {
+                  const models = [...(settings?.[id].models ?? [])]
+                  if (selection?.provider === id && !models.includes(selection.model))
+                    models.unshift(selection.model)
+                  return models.map((model) => (
+                    <option key={`${id}:${model}`} value={`${id}:${model}`}>
+                      {id === 'openai' ? 'OpenAI' : 'Ollama'} · {model}
+                    </option>
+                  ))
+                })}
                 {api.config?.testProvider && (
                   <option value="test">Scripted test provider · no model</option>
                 )}
+                <option value="manage">Manage providers…</option>
               </select>
               <button
                 className="cut-primary"
                 type="submit"
-                disabled={!api.repo || !task.trim() || sending}
+                disabled={!api.repo || !task.trim() || sending || openingRepo || api.connecting}
               >
                 {investigate ? 'Start investigation' : 'Start coding'}
               </button>
             </div>
           </form>
-          {!api.config?.live.configured && (
+          {modelError && <p role="alert">{modelError}</p>}
+          {selection && !settings?.[selection.provider].checks[selection.model]?.ok && (
             <p>
-              Live coding needs OPENAI_API_KEY and PARALLAX_MODEL on the runner.{' '}
+              Selected: {selection.provider === 'openai' ? 'OpenAI' : 'Ollama'} · {selection.model}.
+              The coding-agent tool check has not passed in this runner instance. Open Manage
+              providers to check it; environment-configured development models remain supported.
+            </p>
+          )}
+          {settings?.testTransport && (
+            <p className="provider-test-label">PROTOCOL TEST DOUBLE — NO LIVE MODEL</p>
+          )}
+          {!selection && (
+            <p>
+              Connect a provider in Manage providers to start coding.{' '}
               {api.config?.testProvider
                 ? 'The test provider runs a disclosed script with real tools; it does not interpret arbitrary tasks.'
                 : 'The pickup investigation runs without a key.'}
@@ -193,8 +275,19 @@ export default function CodingWorkspace() {
               <span>
                 {session.provider === 'test'
                   ? 'SCRIPTED TEST PROVIDER · NO MODEL'
-                  : 'LIVE PROVIDER'}
+                  : session.modelSelection
+                    ? `${session.modelSelection.provider === 'openai' ? 'OpenAI' : 'Ollama'} · ${session.modelSelection.model}`
+                    : 'LIVE PROVIDER · legacy session'}
               </span>
+              {(settings?.testTransport || session.modelSelection?.testDouble) && (
+                <small>PROTOCOL TEST DOUBLE · NO LIVE MODEL</small>
+              )}
+              {session.providerRuns?.map((run) => (
+                <small key={run.id} className="provider-model-label">
+                  Turn {run.turn} · {run.candidate} · {run.provider} /{' '}
+                  {run.actualModel ?? run.model} · {run.status}
+                </small>
+              ))}
               <p>
                 {session.repo.path} · {session.repo.branch}
               </p>
@@ -391,6 +484,19 @@ export default function CodingWorkspace() {
             </details>
           </section>
         </main>
+      )}
+      {manage && (
+        <ProviderSettingsPanel
+          key={manage}
+          settings={settings}
+          initial={manage}
+          update={async (data) => {
+            const result = await api.configureProvider(data)
+            if (data.action === 'select') setProvider('live')
+            return result
+          }}
+          onClose={() => setManage(null)}
+        />
       )}
     </div>
   )

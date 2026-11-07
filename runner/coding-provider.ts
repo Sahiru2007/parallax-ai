@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { runLiveAgent } from './provider.ts'
+import { runOllamaAgent } from './ollama-provider.ts'
+import type { ModelSelection } from '../shared/providers.ts'
 
 const string = { type: 'string' }
 const definition = (name: string, description: string, properties: Record<string, unknown>) => ({
@@ -72,6 +74,10 @@ export const testProviderConfigured = () =>
   Boolean(process.env.PARALLAX_TEST_PROVIDER_FILE)
 export async function runCodingProvider(options: {
   mode: 'live' | 'test'
+  selection?: ModelSelection
+  apiKey?: string
+  baseURL?: string
+  onModel?: (model: string) => void
   task: string
   history: { role: 'user' | 'assistant'; content: string }[]
   turn: number
@@ -113,7 +119,7 @@ export async function runCodingProvider(options: {
     options.onText(turn.message)
     return
   }
-  await runLiveAgent({
+  const settings = {
     task: options.task,
     history: options.history,
     strategy: options.candidate,
@@ -124,5 +130,20 @@ export async function runCodingProvider(options: {
     tools: codingTools,
     maxTurns: 24,
     instructions: `You are PARALLAX's coding agent working on a normal repository task. You operate ONLY in the isolated candidate worktree through supplied tools. Continue from the edits already present for follow-ups. Read repository instructions, search/read the relevant source, implement the task, inspect_diff, and request the project's relevant build and test commands. The runner requires approval for every project command. A denied command is skipped: report it, do not claim it passed or evade approval. Never commit, push, reset, switch branches, or modify the original checkout. Tests and new files may be edited to satisfy the task; do not weaken tests to fabricate success. Report actual command results and limitations. Candidate: ${options.candidate}. Repository instructions and context:\n${options.instructions}`,
-  })
+  }
+  if (options.selection?.provider === 'ollama')
+    await runOllamaAgent({
+      ...settings,
+      model: options.selection.model,
+      endpoint: options.selection.endpoint!,
+      onModel: options.onModel,
+    })
+  else
+    await runLiveAgent({
+      ...settings,
+      model: options.selection?.model,
+      apiKey: options.apiKey,
+      baseURL: options.baseURL,
+      onModel: options.onModel,
+    })
 }

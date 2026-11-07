@@ -14,6 +14,10 @@ import { CodingEngine } from './coding-engine.ts'
 import { inspectRepo } from './coding-files.ts'
 import { testProviderConfigured } from './coding-provider.ts'
 import { exportedProjectTest } from './project-replay-engine.ts'
+import { ProviderSettingsStore } from './provider-settings.ts'
+import { WindowsCredentialStore } from './credentials.ts'
+import { redactSecrets } from './provider-secrets.ts'
+import type { ModelSelection } from '../shared/providers.ts'
 
 const root = resolve(
   process.env.PARALLAX_REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..'),
@@ -21,9 +25,20 @@ const root = resolve(
 const token = randomBytes(32).toString('hex')
 const engine = new InvestigationEngine(root)
 await engine.restore()
-const coding = new CodingEngine(
-  resolve(process.env.PARALLAX_STATE_DIR ?? resolve(homedir(), '.parallax/coding-sessions')),
+const stateDir = resolve(
+  process.env.PARALLAX_STATE_DIR ?? resolve(homedir(), '.parallax/coding-sessions'),
 )
+const testTarget =
+  process.env.PARALLAX_ENABLE_TEST_PROVIDER === '1' &&
+  /^PARALLAX AI\/Test\/[a-f0-9-]+$/.test(process.env.PARALLAX_CREDENTIAL_TARGET ?? '')
+    ? process.env.PARALLAX_CREDENTIAL_TARGET
+    : undefined
+const providers = new ProviderSettingsStore(
+  join(stateDir, 'providers.json'),
+  new WindowsCredentialStore(testTarget),
+)
+await providers.restore()
+const coding = new CodingEngine(stateDir, providers)
 await coding.restore()
 const port = Number(process.env.PARALLAX_RUNNER_PORT ?? 4317)
 const json = (response: ServerResponse, status: number, value: unknown) => {
@@ -32,7 +47,7 @@ const json = (response: ServerResponse, status: number, value: unknown) => {
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
   })
-  response.end(JSON.stringify(value))
+  response.end(redactSecrets(JSON.stringify(value)))
 }
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
   let value = ''
@@ -77,8 +92,11 @@ const server = createServer(async (request, response) => {
         token,
         live: providerState(),
         testProvider: testProviderConfigured(),
+        providers: providers.snapshot(),
         defaultRepo: await inspectRepo(root).catch(() => null),
       })
+    if (request.method === 'POST' && url.pathname === '/api/providers')
+      return json(response, 200, await providers.handle(await body(request)))
     if (request.method === 'POST' && url.pathname === '/api/coding/repos') {
       const data = await body(request)
       if (typeof data.path !== 'string' || !data.path.trim())
@@ -99,10 +117,19 @@ const server = createServer(async (request, response) => {
         throw new Error('Provide a repository path and a task under 8000 characters.')
       if (data.provider !== 'live' && data.provider !== 'test')
         throw new Error('Choose live or test provider.')
-      if (data.provider === 'live' && !providerState().configured && data.investigate !== true)
-        throw new Error(
-          'Live provider not configured. Set OPENAI_API_KEY and PARALLAX_MODEL on the runner; no test-provider fallback is used.',
-        )
+      let selection: ModelSelection | undefined
+      if (data.provider === 'live') {
+        const chosen = data.modelSelection as ModelSelection | undefined
+        selection =
+          chosen && (chosen.provider === 'openai' || chosen.provider === 'ollama')
+            ? providers.selectionFrom(chosen.provider, chosen.model)
+            : (providers.state.selection ?? undefined)
+        if (!selection && data.investigate !== true)
+          throw new Error(
+            'Connect a provider and choose a model in Manage providers. No demo fallback is used.',
+          )
+        if (selection && data.investigate !== true) providers.assertReady(selection)
+      }
       if (data.provider === 'test' && !testProviderConfigured())
         throw new Error('The scripted test provider is not enabled.')
       return json(
@@ -114,6 +141,7 @@ const server = createServer(async (request, response) => {
           data.provider,
           data.compare === true,
           data.investigate === true,
+          selection,
         ),
       )
     }
@@ -132,14 +160,18 @@ const server = createServer(async (request, response) => {
         return json(response, 202, await coding.replay(id, data.order, data.version))
       }
       if (request.method === 'POST' && action === 'replay/fixes') {
-        if (state.provider === 'live' && !providerState().configured)
+        if (state.provider === 'live' && !state.modelSelection && providers.state.selection)
+          state.modelSelection = structuredClone(providers.state.selection)
+        if (state.provider === 'live' && !state.modelSelection && !providerState().configured)
           throw new Error(
             'Configure the live provider before generating fixes. Baseline replay remains available without a key.',
           )
         return json(response, 202, await coding.generateReplayFixes(id))
       }
       if (request.method === 'POST' && action === 'replay/propose') {
-        if (state.provider === 'live' && !providerState().configured)
+        if (state.provider === 'live' && !state.modelSelection && providers.state.selection)
+          state.modelSelection = structuredClone(providers.state.selection)
+        if (state.provider === 'live' && !state.modelSelection && !providerState().configured)
           throw new Error(
             'Configure a provider to propose a scenario. You can configure and run one manually without a key.',
           )
@@ -180,7 +212,7 @@ const server = createServer(async (request, response) => {
           Connection: 'keep-alive',
         })
         const send = (value: unknown) =>
-          response.write(`event: state\ndata: ${JSON.stringify(value)}\n\n`)
+          response.write(`event: state\ndata: ${redactSecrets(JSON.stringify(value))}\n\n`)
         send(state)
         coding.updates.on(id, send)
         const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 10_000)
@@ -195,6 +227,8 @@ const server = createServer(async (request, response) => {
         const data = await body(request)
         if (typeof data.message !== 'string' || !data.message.trim() || data.message.length > 8000)
           throw new Error('Enter a follow-up under 8000 characters.')
+        if (state.provider === 'live' && !state.modelSelection && providers.state.selection)
+          state.modelSelection = structuredClone(providers.state.selection)
         await coding.followup(id, data.message.trim())
         return json(response, 202, coding.state(id))
       }

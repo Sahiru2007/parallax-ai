@@ -26,5 +26,20 @@ test('everyday coding entry obeys production CSP and fits desktop and narrow scr
       animations: 'disabled',
     })
   }
+  await page.getByRole('button', { name: 'Manage providers', exact: true }).click()
+  const providers = page.getByRole('dialog', { name: 'Manage providers' })
+  await expect(providers.getByLabel('OpenAI API key', { exact: true })).toHaveAttribute(
+    'type',
+    'password',
+  )
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 })
+    await expect(providers).toBeVisible()
+    expect(await providers.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
+  }
+  await providers.getByRole('tab', { name: 'Ollama', exact: true }).click()
+  await expect(providers.getByLabel('Ollama server')).toHaveValue('http://127.0.0.1:11434')
+  await page.keyboard.press('Escape')
+  await expect(providers).toHaveCount(0)
   expect(errors).toEqual([])
 })

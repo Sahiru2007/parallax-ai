@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
+import { rememberSecret, secretStream } from './provider-secrets.ts'
 
 export interface CommandResult {
   exitCode: number
@@ -26,8 +27,10 @@ export async function command(
   signal?.throwIfAborted()
   return new Promise((resolve, reject) => {
     const environment = { ...process.env }
+    rememberSecret(environment.OPENAI_API_KEY)
     delete environment.OPENAI_API_KEY
     delete environment.PARALLAX_MODEL
+    delete environment.PARALLAX_OPENAI_TEST_URL
     const child = spawn(executable, args, {
       cwd,
       windowsHide: true,
@@ -40,6 +43,8 @@ export async function command(
       stderr = ''
     const outDecoder = new StringDecoder('utf8'),
       errDecoder = new StringDecoder('utf8')
+    const outSecrets = secretStream(),
+      errSecrets = secretStream()
     const collect = (channel: 'stdout' | 'stderr', text: string) => {
       if (!text) return
       output = (output + text).slice(-150_000)
@@ -47,10 +52,10 @@ export async function command(
       else stderr = (stderr + text).slice(-150_000)
       options.onOutput?.(text)
     }
-    child.stdout.on('data', (data) => collect('stdout', outDecoder.write(data)))
-    child.stderr.on('data', (data) => collect('stderr', errDecoder.write(data)))
-    child.stdout.on('end', () => collect('stdout', outDecoder.end()))
-    child.stderr.on('end', () => collect('stderr', errDecoder.end()))
+    child.stdout.on('data', (data) => collect('stdout', outSecrets(outDecoder.write(data))))
+    child.stderr.on('data', (data) => collect('stderr', errSecrets(errDecoder.write(data))))
+    child.stdout.on('end', () => collect('stdout', outSecrets(outDecoder.end(), true)))
+    child.stderr.on('end', () => collect('stderr', errSecrets(errDecoder.end(), true)))
     let failure: CommandFailure | undefined
     let stopping: Promise<void> | undefined
     const stop = (code: 'cancelled' | 'timeout') => {

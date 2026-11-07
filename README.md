@@ -2,6 +2,8 @@
 
 A local coding-agent workspace. Open a Git checkout, describe a task, continue with follow-ups in an isolated worktree, review real build/test evidence, and export or explicitly apply the patch. The pickup-search investigation also provides an editable browser execution timeline for timing bugs.
 
+**Provider settings:** Connect OpenAI or local Ollama, check tool capability, and choose a model from the task composer. Saved keys use Windows Credential Manager on the runner. See [provider setup and verification](docs/providers.md).
+
 **Step 3:** Compare and Replay now works inside ordinary project sessions for local Chromium apps using HTTP fetch/XHR. See [the project replay guide](docs/step-3.md) for scenario configuration, keyboard/mouse controls, standalone exports, and the separate dashboard acceptance example. `/pickup` remains runnable.
 
 The main screen is the everyday coding workspace. The **pickup-address search race** remains accessible from its sample button or `/pickup`, with the existing two-candidate replay workflow. The earlier seven-screen foundation remains available at `/legacy`. Its native setup reference is preserved in [docs/phase-1-native.md](docs/phase-1-native.md).
@@ -36,7 +38,7 @@ The first implementation handles repositories with up to 25 MB of nonignored sou
 
 ### Live and test providers
 
-Configure `OPENAI_API_KEY` and `PARALLAX_MODEL` in the ignored runner `.env`, restart `npm run dev`, and select **Live provider**. The existing OpenAI Responses tool loop is reused with general repository tools, saved conversation context, and a 24-response limit per coding turn. No live credentials are sent to Vite or returned by the browser API.
+Use **Manage providers** to configure OpenAI or loopback Ollama and choose a model. The connection test and harmless coding-agent tool check have separate results. The default applies to new sessions; existing sessions retain their model. `OPENAI_API_KEY` and `PARALLAX_MODEL` in the ignored runner `.env` remain supported for development. The existing OpenAI Responses loop and new Ollama adapter use the same repository tools, approvals, saved conversation, and 24-response turn limit. No credentials are returned by the browser API. See [the setup guide](docs/providers.md) for key removal, restart behavior, and verification limits.
 
 With no credentials, normal tasks report the missing configuration. They never silently use bundled recipes. The **scripted test provider** is available only when the runner has both `PARALLAX_ENABLE_TEST_PROVIDER=1` and `PARALLAX_TEST_PROVIDER_FILE` set to an explicit JSON fixture. It is labelled **NO MODEL** throughout the UI, executes the same repository tools and approvals, and does not interpret arbitrary English requests. It is for verification, not a model substitute.
 
