@@ -2,7 +2,7 @@
 
 A local coding-agent workspace. Open a Git checkout, describe a task, continue with follow-ups in an isolated worktree, review real build/test evidence, and export or explicitly apply the patch. The pickup-search investigation also provides an editable browser execution timeline for timing bugs.
 
-**Provider settings:** Connect OpenAI or local Ollama, check tool capability, and choose a model from the task composer. Saved keys use Windows Credential Manager on the runner. See [provider setup and verification](docs/providers.md).
+**Provider settings:** Connect Google Gemini, OpenAI, or local Ollama, check tool capability, and choose a model from the task composer. Saved keys use Windows Credential Manager on the runner. Gemini lists available models with Flash-Lite first, streams actual activity, and records token usage. Agent round limits are visible and configurable. See [Gemini setup and live verification](docs/gemini.md) and [provider settings](docs/providers.md).
 
 **Step 3:** Compare and Replay now works inside ordinary project sessions for local Chromium apps using HTTP fetch/XHR. See [the project replay guide](docs/step-3.md) for scenario configuration, keyboard/mouse controls, standalone exports, and the separate dashboard acceptance example. `/pickup` remains runnable.
 

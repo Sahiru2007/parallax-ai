@@ -1,4 +1,5 @@
 import { rememberSecret, redactSecrets } from './provider-secrets.ts'
+import type { AgentProgress } from '../shared/providers.ts'
 interface FunctionCall {
   type: 'function_call'
   call_id: string
@@ -10,6 +11,7 @@ interface Message {
   content: { type: string; text?: string }[]
 }
 interface ResponseOutput {
+  usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number }
   model?: string
   output: (FunctionCall | Message | { type: string })[]
   error?: { message: string }
@@ -67,22 +69,24 @@ export function providerState() {
     model: process.env.PARALLAX_MODEL ?? null,
   }
 }
-export async function runLiveAgent(options: {
-  task: string
-  strategy: string
-  signal: AbortSignal
-  steering: () => string[]
-  execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
-  onText: (text: string) => void
-  instructions?: string
-  tools?: unknown[]
-  history?: { role: 'user' | 'assistant'; content: string }[]
-  maxTurns?: number
-  model?: string
-  apiKey?: string
-  baseURL?: string
-  onModel?: (model: string) => void
-}) {
+export async function runLiveAgent(
+  options: AgentProgress & {
+    task: string
+    strategy: string
+    signal: AbortSignal
+    steering: () => string[]
+    execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
+    onText: (text: string) => void
+    instructions?: string
+    tools?: unknown[]
+    history?: { role: 'user' | 'assistant'; content: string }[]
+    maxTurns?: number
+    model?: string
+    apiKey?: string
+    baseURL?: string
+    onModel?: (model: string) => void
+  },
+) {
   const model = options.model ?? process.env.PARALLAX_MODEL
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY
   rememberSecret(apiKey)
@@ -95,6 +99,7 @@ export async function runLiveAgent(options: {
   const maxTurns = options.maxTurns ?? 12
   for (let turn = 0; turn < maxTurns; turn++) {
     options.signal.throwIfAborted()
+    options.onRound?.(turn + 1, maxTurns)
     const steering = options.steering()
     for (const text of steering.slice(steeringCount))
       input.push({ role: 'user', content: `Developer steering: ${text}` })
@@ -127,6 +132,12 @@ export async function runLiveAgent(options: {
     if (payload.error || !Array.isArray(payload.output))
       throw new Error('Invalid provider response from OpenAI. Check model access and retry.')
     if (payload.model) options.onModel?.(payload.model)
+    if (payload.usage)
+      options.onUsage?.({
+        inputTokens: payload.usage.input_tokens,
+        outputTokens: payload.usage.output_tokens,
+        totalTokens: payload.usage.total_tokens,
+      })
     // Replay all output items, including reasoning, to preserve stateless tool-call context.
     input.push(...payload.output)
     const calls = payload.output.filter(

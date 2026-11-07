@@ -1,10 +1,16 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { ModelSelection, ProviderCheck, ProviderSettings } from '../shared/providers.ts'
+import type {
+  ModelSelection,
+  ProviderCheck,
+  ProviderSettings,
+  ProviderId,
+} from '../shared/providers.ts'
 import { WindowsCredentialStore, type CredentialStore } from './credentials.ts'
 import { rememberSecret } from './provider-secrets.ts'
 import { runLiveAgent } from './provider.ts'
 import { runOllamaAgent } from './ollama-provider.ts'
+import { geminiModels, runGeminiAgent } from './gemini-provider.ts'
 
 export function localOllamaURL(value: unknown) {
   if (typeof value !== 'string') throw new Error('Enter a loopback Ollama URL.')
@@ -32,7 +38,14 @@ const check = (ok: boolean, message: string): ProviderCheck => ({
   at: new Date().toISOString(),
 })
 const initial = (): ProviderSettings => ({
+  maxToolRounds: 12,
   selection: null,
+  gemini: {
+    keySource: 'none',
+    credentialStore: process.platform === 'win32',
+    models: [],
+    checks: {},
+  },
   openai: {
     keySource: 'none',
     credentialStore: process.platform === 'win32',
@@ -45,13 +58,25 @@ const initial = (): ProviderSettings => ({
 export class ProviderSettingsStore {
   file: string
   credentials: CredentialStore
+  geminiCredentials: CredentialStore
   state = initial()
   useEnvironment = true
+  useGeminiEnvironment = true
   openaiBase = 'https://api.openai.com/v1'
+  geminiBase = 'https://generativelanguage.googleapis.com/v1beta'
   private queue: Promise<unknown> = Promise.resolve()
-  constructor(file: string, credentials: CredentialStore = new WindowsCredentialStore()) {
+  constructor(
+    file: string,
+    credentials: CredentialStore = new WindowsCredentialStore(),
+    geminiCredentials: CredentialStore = new WindowsCredentialStore('PARALLAX AI/Gemini'),
+  ) {
     this.file = file
     this.credentials = credentials
+    this.geminiCredentials = geminiCredentials
+    if (process.env.PARALLAX_ENABLE_TEST_PROVIDER === '1' && process.env.PARALLAX_GEMINI_TEST_URL) {
+      this.geminiBase = localOllamaURL(process.env.PARALLAX_GEMINI_TEST_URL) + '/v1beta'
+      this.state.testTransport = true
+    }
     if (process.env.PARALLAX_ENABLE_TEST_PROVIDER === '1' && process.env.PARALLAX_OPENAI_TEST_URL) {
       this.openaiBase = localOllamaURL(process.env.PARALLAX_OPENAI_TEST_URL) + '/v1'
       this.state.testTransport = true
@@ -61,12 +86,18 @@ export class ProviderSettingsStore {
     try {
       const data = JSON.parse(await readFile(this.file, 'utf8'))
       this.useEnvironment = data.useEnvironment !== false
+      this.useGeminiEnvironment = data.useGeminiEnvironment !== false
+      this.state.maxToolRounds =
+        Number.isInteger(data.maxToolRounds) && data.maxToolRounds >= 2 && data.maxToolRounds <= 24
+          ? data.maxToolRounds
+          : 12
       this.state.selection = data.selection ?? null
       this.state.ollama = { ...this.state.ollama, ...data.ollama }
       this.state.ollama.endpoint = localOllamaURL(this.state.ollama.endpoint)
       // Readiness is tested again after a runner restart; saved model choices remain visible.
       this.state.ollama.checks = {}
       this.state.openai.models = data.openaiModels ?? []
+      this.state.gemini.models = data.geminiModels ?? []
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         this.state.openai.connection = check(
@@ -80,6 +111,12 @@ export class ProviderSettingsStore {
         'Windows Credential Manager could not be read. Check your Windows account access and retry in settings.',
       )
     })
+    await this.refreshKeySource('gemini').catch(() => {
+      this.state.gemini.connection = check(
+        false,
+        'Windows Credential Manager could not be read. Check Windows account access and retry in settings.',
+      )
+    })
     if (
       !this.state.selection &&
       this.state.openai.keySource === 'environment' &&
@@ -87,20 +124,38 @@ export class ProviderSettingsStore {
     )
       this.state.selection = { provider: 'openai', model: process.env.PARALLAX_MODEL }
   }
-  async refreshKeySource() {
-    this.state.openai.credentialStore = this.credentials.available
-    const saved = this.credentials.available ? await this.credentials.get() : null
-    rememberSecret(saved)
-    this.state.openai.keySource = saved
-      ? 'credential-store'
+  private cloudCredentials(provider: 'openai' | 'gemini') {
+    return provider === 'gemini' ? this.geminiCredentials : this.credentials
+  }
+  private environmentKey(provider: 'openai' | 'gemini') {
+    return provider === 'gemini'
+      ? this.useGeminiEnvironment && (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)
       : this.useEnvironment && process.env.OPENAI_API_KEY
+  }
+  private setEnvironment(provider: 'openai' | 'gemini', value: boolean) {
+    if (provider === 'gemini') this.useGeminiEnvironment = value
+    else this.useEnvironment = value
+  }
+  async refreshKeySource(provider: 'openai' | 'gemini' = 'openai') {
+    const credentials = this.cloudCredentials(provider),
+      current = this.state[provider]
+    current.credentialStore = credentials.available
+    const saved = credentials.available ? await credentials.get() : null
+    rememberSecret(saved)
+    current.keySource = saved
+      ? 'credential-store'
+      : this.environmentKey(provider)
         ? 'environment'
         : 'none'
   }
-  async key() {
-    const stored = this.credentials.available ? await this.credentials.get() : null
-    const key = stored || (this.useEnvironment ? process.env.OPENAI_API_KEY : null)
-    if (!key) throw new Error('OpenAI has no API key. Open Manage providers to connect it.')
+  async key(provider: 'openai' | 'gemini' = 'openai') {
+    const credentials = this.cloudCredentials(provider)
+    const stored = credentials.available ? await credentials.get() : null
+    const key = stored || this.environmentKey(provider)
+    if (!key)
+      throw new Error(
+        `${provider === 'gemini' ? 'Gemini' : 'OpenAI'} has no API key. Open Manage providers to connect it.`,
+      )
     rememberSecret(key)
     return key
   }
@@ -115,7 +170,10 @@ export class ProviderSettingsStore {
         {
           selection: this.state.selection,
           useEnvironment: this.useEnvironment,
+          useGeminiEnvironment: this.useGeminiEnvironment,
+          maxToolRounds: this.state.maxToolRounds,
           openaiModels: this.state.openai.models,
+          geminiModels: this.state.gemini.models,
           ollama: {
             endpoint: this.state.ollama.endpoint,
             models: this.state.ollama.models,
@@ -134,10 +192,19 @@ export class ProviderSettingsStore {
     return task
   }
   private async update(data: Record<string, unknown>) {
+    if (data.action === 'round-limit') {
+      if (!Number.isInteger(data.limit) || Number(data.limit) < 2 || Number(data.limit) > 24)
+        throw new Error('Agent round limit must be an integer from 2 to 24.')
+      this.state.maxToolRounds = Number(data.limit)
+      if (this.state.selection) this.state.selection.maxToolRounds = this.state.maxToolRounds
+      await this.persist()
+      return this.snapshot()
+    }
     const provider = data.provider
-    if (provider !== 'openai' && provider !== 'ollama') throw new Error('Choose OpenAI or Ollama.')
+    if (provider !== 'gemini' && provider !== 'openai' && provider !== 'ollama')
+      throw new Error('Choose Gemini, OpenAI, or Ollama.')
     const current = this.state[provider]
-    if (data.action === 'save-key' && provider === 'openai') {
+    if (data.action === 'save-key' && provider !== 'ollama') {
       if (
         typeof data.key !== 'string' ||
         data.key.length < 8 ||
@@ -146,29 +213,31 @@ export class ProviderSettingsStore {
       )
         throw new Error('Enter a valid API key without spaces (8–2000 characters).')
       rememberSecret(data.key)
-      await this.credentials.set(data.key)
-      this.useEnvironment = false
-      this.state.openai.models = []
-      this.state.openai.checks = {}
-      this.state.openai.connection = undefined
-      await this.refreshKeySource()
-    } else if (data.action === 'remove-key' && provider === 'openai') {
-      await this.credentials.remove()
-      this.useEnvironment = false // Removing a key must not silently activate an environment key.
-      this.state.openai.models = []
-      this.state.openai.checks = {}
-      this.state.openai.connection = undefined
-      await this.refreshKeySource()
-    } else if (data.action === 'use-environment' && provider === 'openai') {
-      await this.credentials.remove()
-      this.useEnvironment = true
-      this.state.openai.checks = {}
-      await this.refreshKeySource()
+      await this.cloudCredentials(provider).set(data.key)
+      this.setEnvironment(provider, false)
+      current.models = []
+      current.checks = {}
+      current.connection = undefined
+      await this.refreshKeySource(provider)
+    } else if (data.action === 'remove-key' && provider !== 'ollama') {
+      await this.cloudCredentials(provider).remove()
+      this.setEnvironment(provider, false)
+      current.models = []
+      current.checks = {}
+      current.connection = undefined
+      await this.refreshKeySource(provider)
+    } else if (data.action === 'use-environment' && provider !== 'ollama') {
+      await this.cloudCredentials(provider).remove()
+      this.setEnvironment(provider, true)
+      current.checks = {}
+      await this.refreshKeySource(provider)
     } else if (data.action === 'endpoint' && provider === 'ollama') {
       this.state.ollama = { endpoint: localOllamaURL(data.endpoint), models: [], checks: {} }
     } else if (data.action === 'connection') {
       try {
-        if (provider === 'openai') {
+        if (provider === 'gemini') {
+          current.models = await geminiModels(await this.key('gemini'), this.geminiBase)
+        } else if (provider === 'openai') {
           const key = await this.key()
           const response = await fetch(this.openaiBase + '/models', {
             headers: { Authorization: `Bearer ${key}` },
@@ -219,7 +288,7 @@ export class ProviderSettingsStore {
             ? error.message
             : provider === 'ollama'
               ? 'Ollama is unreachable. Start the local server and verify its loopback URL.'
-              : 'OpenAI is unreachable. Check your network and retry.',
+              : `${provider === 'gemini' ? 'Gemini' : 'OpenAI'} is unreachable. Check your network and retry.`,
         )
       }
     } else if (data.action === 'agent-check') {
@@ -266,7 +335,13 @@ export class ProviderSettingsStore {
           instructions: 'Perform only the requested harmless tool check. No repository is open.',
           model: selection.model,
         }
-        if (provider === 'openai')
+        if (provider === 'gemini')
+          await runGeminiAgent({
+            ...options,
+            apiKey: await this.key('gemini'),
+            baseURL: this.geminiBase,
+          })
+        else if (provider === 'openai')
           await runLiveAgent({ ...options, apiKey: await this.key(), baseURL: this.openaiBase })
         else await runOllamaAgent({ ...options, endpoint: selection.endpoint! })
         if (called !== 1 || !returned || invalid)
@@ -287,7 +362,7 @@ export class ProviderSettingsStore {
     await this.persist()
     return this.snapshot()
   }
-  selectionFrom(provider: 'openai' | 'ollama', model: unknown): ModelSelection {
+  selectionFrom(provider: ProviderId, model: unknown): ModelSelection {
     if (typeof model !== 'string' || !model || model.length > 200)
       throw new Error('Select a model.')
     if (
@@ -302,6 +377,7 @@ export class ProviderSettingsStore {
     return {
       provider,
       model,
+      maxToolRounds: this.state.maxToolRounds,
       ...(provider === 'ollama' ? { endpoint: this.state.ollama.endpoint } : {}),
       ...(this.state.testTransport ? { testDouble: true } : {}),
     }
@@ -311,7 +387,11 @@ export class ProviderSettingsStore {
       throw new Error(
         'This session belongs to a different live/test provider transport. Reopen it with its original provider configuration.',
       )
-    if (selection.provider !== 'openai' && selection.provider !== 'ollama')
+    if (
+      selection.provider !== 'gemini' &&
+      selection.provider !== 'openai' &&
+      selection.provider !== 'ollama'
+    )
       throw new Error('Choose a provider in Manage providers.')
     if (selection.provider === 'ollama' && selection.endpoint !== this.state.ollama.endpoint)
       throw new Error(

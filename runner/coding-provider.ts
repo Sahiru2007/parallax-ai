@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { runLiveAgent } from './provider.ts'
 import { runOllamaAgent } from './ollama-provider.ts'
-import type { ModelSelection } from '../shared/providers.ts'
+import type { ModelSelection, AgentProgress } from '../shared/providers.ts'
+import { runGeminiAgent } from './gemini-provider.ts'
 
 const string = { type: 'string' }
 const definition = (name: string, description: string, properties: Record<string, unknown>) => ({
@@ -72,22 +73,25 @@ export const codingTools = [
 export const testProviderConfigured = () =>
   process.env.PARALLAX_ENABLE_TEST_PROVIDER === '1' &&
   Boolean(process.env.PARALLAX_TEST_PROVIDER_FILE)
-export async function runCodingProvider(options: {
-  mode: 'live' | 'test'
-  selection?: ModelSelection
-  apiKey?: string
-  baseURL?: string
-  onModel?: (model: string) => void
-  task: string
-  history: { role: 'user' | 'assistant'; content: string }[]
-  turn: number
-  candidate: string
-  candidateId?: string
-  instructions: string
-  signal: AbortSignal
-  execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
-  onText: (text: string) => void
-}) {
+export async function runCodingProvider(
+  options: AgentProgress & {
+    mode: 'live' | 'test'
+    selection?: ModelSelection
+    apiKey?: string
+    baseURL?: string
+    geminiBaseURL?: string
+    onModel?: (model: string) => void
+    task: string
+    history: { role: 'user' | 'assistant'; content: string }[]
+    turn: number
+    candidate: string
+    candidateId?: string
+    instructions: string
+    signal: AbortSignal
+    execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
+    onText: (text: string) => void
+  },
+) {
   if (options.mode === 'test') {
     if (!testProviderConfigured())
       throw new Error(
@@ -128,10 +132,21 @@ export async function runCodingProvider(options: {
     execute: options.execute,
     onText: options.onText,
     tools: codingTools,
-    maxTurns: 24,
+    maxTurns: Math.max(2, Math.min(24, options.selection?.maxToolRounds ?? 12)),
+    onRound: options.onRound,
+    onUsage: options.onUsage,
+    onDelta: options.onDelta,
     instructions: `You are PARALLAX's coding agent working on a normal repository task. You operate ONLY in the isolated candidate worktree through supplied tools. Continue from the edits already present for follow-ups. Read repository instructions, search/read the relevant source, implement the task, inspect_diff, and request the project's relevant build and test commands. The runner requires approval for every project command. A denied command is skipped: report it, do not claim it passed or evade approval. Never commit, push, reset, switch branches, or modify the original checkout. Tests and new files may be edited to satisfy the task; do not weaken tests to fabricate success. Report actual command results and limitations. Candidate: ${options.candidate}. Repository instructions and context:\n${options.instructions}`,
   }
-  if (options.selection?.provider === 'ollama')
+  if (options.selection?.provider === 'gemini')
+    await runGeminiAgent({
+      ...settings,
+      model: options.selection.model,
+      apiKey: options.apiKey!,
+      baseURL: options.geminiBaseURL,
+      onModel: options.onModel,
+    })
+  else if (options.selection?.provider === 'ollama')
     await runOllamaAgent({
       ...settings,
       model: options.selection.model,

@@ -36,6 +36,7 @@ const testTarget =
 const providers = new ProviderSettingsStore(
   join(stateDir, 'providers.json'),
   new WindowsCredentialStore(testTarget),
+  new WindowsCredentialStore(testTarget ? testTarget + '/Gemini' : 'PARALLAX AI/Gemini'),
 )
 await providers.restore()
 const coding = new CodingEngine(stateDir, providers)
@@ -121,7 +122,10 @@ const server = createServer(async (request, response) => {
       if (data.provider === 'live') {
         const chosen = data.modelSelection as ModelSelection | undefined
         selection =
-          chosen && (chosen.provider === 'openai' || chosen.provider === 'ollama')
+          chosen &&
+          (chosen.provider === 'gemini' ||
+            chosen.provider === 'openai' ||
+            chosen.provider === 'ollama')
             ? providers.selectionFrom(chosen.provider, chosen.model)
             : (providers.state.selection ?? undefined)
         if (!selection && data.investigate !== true)
@@ -383,7 +387,7 @@ const server = createServer(async (request, response) => {
 })
 server.listen(port, '127.0.0.1', () =>
   console.log(
-    `PARALLAX local runner · http://127.0.0.1:${port} · sample execution ready · live ${providerState().configured ? 'configured' : 'not configured'}`,
+    `PARALLAX local runner · http://127.0.0.1:${port} · provider settings ready · pickup OpenAI environment ${providerState().configured ? 'configured' : 'not configured'}`,
   ),
 )
 server.on('error', (error) => {

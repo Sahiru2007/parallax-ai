@@ -3,7 +3,7 @@ import { Logo } from '../../components/ui'
 import { useCoding } from './useCoding'
 import { ProjectReplayPanel } from './ProjectReplayPanel'
 import { ProviderSettingsPanel } from './ProviderSettingsPanel'
-import type { ProviderId } from '../../../shared/providers'
+import { providerName, type ProviderId } from '../../../shared/providers'
 import './studio.css'
 import './coding.css'
 
@@ -70,7 +70,7 @@ export default function CodingWorkspace() {
         <a href="/legacy">Design archive</a>
         <button
           disabled={!api.config || api.connecting}
-          onClick={() => setManage(selection?.provider ?? 'openai')}
+          onClick={() => setManage(selection?.provider ?? 'gemini')}
         >
           Manage providers
         </button>
@@ -106,6 +106,9 @@ export default function CodingWorkspace() {
           <p>One task. An isolated implementation. Evidence you can review.</p>
           {!selection && (
             <div className="provider-welcome" aria-label="Connect a provider">
+              <button disabled={!api.config || api.connecting} onClick={() => setManage('gemini')}>
+                Connect Gemini
+              </button>
               <button disabled={!api.config || api.connecting} onClick={() => setManage('openai')}>
                 Connect OpenAI
               </button>
@@ -192,7 +195,7 @@ export default function CodingWorkspace() {
                 onChange={(e) => {
                   const value = e.target.value
                   if (value === 'manage') {
-                    setManage(selection?.provider ?? 'openai')
+                    setManage(selection?.provider ?? 'gemini')
                     return
                   }
                   if (value === 'test' || value === 'live') {
@@ -218,13 +221,13 @@ export default function CodingWorkspace() {
                 }}
               >
                 {!selection && <option value="live">Choose a provider and model…</option>}
-                {(['openai', 'ollama'] as const).flatMap((id) => {
+                {(['gemini', 'openai', 'ollama'] as const).flatMap((id) => {
                   const models = [...(settings?.[id].models ?? [])]
                   if (selection?.provider === id && !models.includes(selection.model))
                     models.unshift(selection.model)
                   return models.map((model) => (
                     <option key={`${id}:${model}`} value={`${id}:${model}`}>
-                      {id === 'openai' ? 'OpenAI' : 'Ollama'} · {model}
+                      {providerName(id)} · {model}
                     </option>
                   ))
                 })}
@@ -245,11 +248,15 @@ export default function CodingWorkspace() {
           {modelError && <p role="alert">{modelError}</p>}
           {selection && !settings?.[selection.provider].checks[selection.model]?.ok && (
             <p>
-              Selected: {selection.provider === 'openai' ? 'OpenAI' : 'Ollama'} · {selection.model}.
-              The coding-agent tool check has not passed in this runner instance. Open Manage
-              providers to check it; environment-configured development models remain supported.
+              Selected: {providerName(selection.provider)} · {selection.model}. The coding-agent
+              tool check has not passed in this runner instance. Open Manage providers to check it;
+              environment-configured development models remain supported.
             </p>
           )}
+          <p>
+            Agent limit: {settings?.maxToolRounds ?? 12} rounds per candidate. Change it in Manage
+            providers.
+          </p>
           {settings?.testTransport && (
             <p className="provider-test-label">PROTOCOL TEST DOUBLE — NO LIVE MODEL</p>
           )}
@@ -276,17 +283,30 @@ export default function CodingWorkspace() {
                 {session.provider === 'test'
                   ? 'SCRIPTED TEST PROVIDER · NO MODEL'
                   : session.modelSelection
-                    ? `${session.modelSelection.provider === 'openai' ? 'OpenAI' : 'Ollama'} · ${session.modelSelection.model}`
+                    ? `${providerName(session.modelSelection.provider)} · ${session.modelSelection.model}`
                     : 'LIVE PROVIDER · legacy session'}
               </span>
               {(settings?.testTransport || session.modelSelection?.testDouble) && (
                 <small>PROTOCOL TEST DOUBLE · NO LIVE MODEL</small>
               )}
               {session.providerRuns?.map((run) => (
-                <small key={run.id} className="provider-model-label">
-                  Turn {run.turn} · {run.candidate} · {run.provider} /{' '}
-                  {run.actualModel ?? run.model} · {run.status}
-                </small>
+                <div key={run.id} className="provider-model-label" data-testid="provider-run">
+                  <small>
+                    Turn {run.turn} · {run.candidate} · {run.provider} /{' '}
+                    {run.actualModel ?? run.model} · {run.status}
+                  </small>
+                  <small>
+                    Requested: {run.model} · Agent rounds: {run.rounds ?? 0}/
+                    {run.maxToolRounds ?? 12} · Tools: {run.toolCalls ?? 0}
+                  </small>
+                  <small>
+                    {run.usage && Object.keys(run.usage).length
+                      ? `Tokens (sum of requests): ${Object.entries(run.usage)
+                          .map(([key, value]) => `${key.replace('Tokens', '')} ${value}`)
+                          .join(' · ')}`
+                      : 'Token usage not reported yet.'}
+                  </small>
+                </div>
               ))}
               <p>
                 {session.repo.path} · {session.repo.branch}

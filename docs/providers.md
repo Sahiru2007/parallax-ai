@@ -1,5 +1,7 @@
 # Provider settings and model selection
 
+Google Gemini is now offered first, alongside OpenAI and local Ollama. See [Gemini setup, round limits, usage, and live verification](gemini.md). Keys are stored separately for each cloud provider. The selection and session-pinning behavior below applies to all three.
+
 Run `npm.cmd run dev` and open http://127.0.0.1:1420. The main workspace offers **Connect OpenAI**, **Connect Ollama**, and **Try the demo · no model** when no model is selected. **Manage providers** remains available in the header and task-composer dropdown.
 
 ## OpenAI

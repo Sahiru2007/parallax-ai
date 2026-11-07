@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ProviderId, ProviderSettings } from '../../../shared/providers'
+import { providerName } from '../../../shared/providers'
 import './providers.css'
 
 export function ProviderSettingsPanel({
@@ -19,6 +20,7 @@ export function ProviderSettingsPanel({
   const [pending, setPending] = useState('')
   const [error, setError] = useState('')
   const keyInput = useRef<HTMLInputElement>(null)
+  const roundInput = useRef<HTMLInputElement>(null)
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     const node = dialog.current
@@ -26,7 +28,13 @@ export function ProviderSettingsPanel({
     return () => node?.close()
   }, [])
   const current = settings?.[provider]
-  const chosen = current?.models.includes(model) ? model : (current?.models[0] ?? '')
+  const cloud = provider === 'ollama' ? undefined : settings?.[provider]
+  const chosen = current?.models.includes(model)
+    ? model
+    : settings?.selection?.provider === provider &&
+        current?.models.includes(settings.selection.model)
+      ? settings.selection.model
+      : (current?.models[0] ?? '')
   async function act(action: string, extra: Record<string, unknown> = {}) {
     setPending(action)
     setError('')
@@ -62,27 +70,28 @@ export function ProviderSettingsPanel({
         <p className="provider-test-label">PROTOCOL TEST DOUBLE — NO LIVE MODEL</p>
       )}
       <div role="tablist" aria-label="Provider settings tabs">
-        {(['openai', 'ollama'] as const).map((id) => (
+        {(['gemini', 'openai', 'ollama'] as const).map((id) => (
           <button
             key={id}
             role="tab"
             disabled={Boolean(pending)}
             aria-selected={provider === id}
             onClick={() => {
+              if (keyInput.current) keyInput.current.value = ''
               setProvider(id)
               setModel('')
               setError('')
             }}
           >
-            {id === 'openai' ? 'OpenAI' : 'Ollama'}
+            {providerName(id)}
           </button>
         ))}
       </div>
-      {provider === 'openai' ? (
+      {provider !== 'ollama' ? (
         <>
           <p>
-            Key: {settings?.openai.keySource ?? 'none'}. Saved keys use Windows Credential Manager.
-            Keys are never returned to the app.
+            Key: {cloud?.keySource ?? 'none'}. Saved keys use Windows Credential Manager. Keys are
+            never returned to the app.
           </p>
           <form
             onSubmit={(e) => {
@@ -93,22 +102,20 @@ export function ProviderSettingsPanel({
             }}
           >
             <label>
-              OpenAI API key
+              {provider === 'gemini' ? 'Gemini' : 'OpenAI'} API key
               <input
                 ref={keyInput}
-                aria-label="OpenAI API key"
+                aria-label={`${provider === 'gemini' ? 'Gemini' : 'OpenAI'} API key`}
                 type="password"
                 autoComplete="off"
                 spellCheck={false}
                 placeholder="Enter or replace API key"
-                disabled={Boolean(pending) || !settings?.openai.credentialStore}
+                disabled={Boolean(pending) || !cloud?.credentialStore}
               />
             </label>
-            <button disabled={Boolean(pending) || !settings?.openai.credentialStore}>
-              Save API key
-            </button>
+            <button disabled={Boolean(pending) || !cloud?.credentialStore}>Save API key</button>
           </form>
-          {!settings?.openai.credentialStore && (
+          {!cloud?.credentialStore && (
             <p>
               OS credential storage is unavailable on this platform. Runner environment variables
               remain supported for development.
@@ -121,6 +128,13 @@ export function ProviderSettingsPanel({
             Use development environment key
           </button>
           <p>Removing a key also disables environment fallback. Re-enable it explicitly above.</p>
+          {provider === 'gemini' && (
+            <p>
+              Test connection loads the generation models available to this key. Available
+              Flash-Lite models appear first for lighter use. The exact model ID is shown below;
+              listing models does not start a coding task or verify tool support.
+            </p>
+          )}
         </>
       ) : (
         <>
@@ -169,11 +183,16 @@ export function ProviderSettingsPanel({
           {!current?.models.length && <option value="">Test connection to list models…</option>}
           {current?.models.map((id) => (
             <option key={id} value={id}>
-              {provider === 'openai' ? 'OpenAI' : 'Ollama'} · {id}
+              {providerName(provider)} · {id}
             </option>
           ))}
         </select>
       </label>
+      {chosen && (
+        <p>
+          Exact model ID: <code>{chosen}</code>
+        </p>
+      )}
       <button
         disabled={Boolean(pending) || !chosen}
         onClick={() => void act('agent-check', { model: chosen })}
@@ -197,9 +216,37 @@ export function ProviderSettingsPanel({
       <p>
         Default:{' '}
         {settings?.selection
-          ? `${settings.selection.provider === 'openai' ? 'OpenAI' : 'Ollama'} · ${settings.selection.model}`
+          ? `${providerName(settings.selection.provider)} · ${settings.selection.model}`
           : 'No model selected'}
         . Existing sessions keep their original provider and model.
+      </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          void act('round-limit', { limit: Number(roundInput.current?.value) })
+        }}
+      >
+        <label>
+          Agent round limit
+          <input
+            key={settings?.maxToolRounds}
+            ref={roundInput}
+            aria-label="Agent round limit"
+            type="number"
+            min={2}
+            max={24}
+            step={1}
+            defaultValue={settings?.maxToolRounds ?? 12}
+            disabled={Boolean(pending)}
+          />
+        </label>
+        <button disabled={Boolean(pending)}>Save round limit</button>
+      </form>
+      <p>
+        Limit: {settings?.maxToolRounds ?? 12} model-response rounds per candidate and instruction.
+        A round may request multiple tools. New sessions use this limit; active sessions retain
+        theirs. Reaching the limit stops the agent and retains partial evidence. Token usage is
+        reported when provided by the API; this is not a spending limit.
       </p>
       {pending && (
         <p role="status">

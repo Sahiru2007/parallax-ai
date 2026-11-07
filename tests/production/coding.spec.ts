@@ -28,6 +28,12 @@ test('everyday coding entry obeys production CSP and fits desktop and narrow scr
   }
   await page.getByRole('button', { name: 'Manage providers', exact: true }).click()
   const providers = page.getByRole('dialog', { name: 'Manage providers' })
+  await providers.getByRole('tab', { name: 'Google Gemini', exact: true }).click()
+  await expect(providers.getByLabel('Gemini API key', { exact: true })).toHaveAttribute(
+    'type',
+    'password',
+  )
+  await providers.getByRole('tab', { name: 'OpenAI', exact: true }).click()
   await expect(providers.getByLabel('OpenAI API key', { exact: true })).toHaveAttribute(
     'type',
     'password',

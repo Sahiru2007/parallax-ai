@@ -8,6 +8,12 @@ import { ProviderSettingsStore, localOllamaURL } from './provider-settings.ts'
 import { WindowsCredentialStore, type CredentialStore } from './credentials.ts'
 import { rememberSecret, secretStream } from './provider-secrets.ts'
 import { command } from './process.ts'
+const noGemini: CredentialStore = {
+  available: false,
+  get: async () => null,
+  set: async () => {},
+  remove: async () => {},
+}
 
 test(
   'Windows Credential Manager stores, replaces, retrieves and removes an inert test credential',
@@ -39,7 +45,7 @@ test('provider settings separate connection from tool readiness, persist selecti
     },
   }
   const dir = await mkdtemp(join(tmpdir(), 'parallax-provider-'))
-  const store = new ProviderSettingsStore(join(dir, 'settings.json'), credentials)
+  const store = new ProviderSettingsStore(join(dir, 'settings.json'), credentials, noGemini)
   await store.restore()
   let toolCapable = false
   const requests: { url: string; body: Record<string, unknown>; auth?: string | null }[] = []
@@ -100,7 +106,7 @@ test('provider settings separate connection from tool readiness, persist selecti
     assert(requests.every((r) => r.auth === 'Bearer inert-openai-test-credential'))
     assert(!JSON.stringify(store.snapshot()).includes('inert-openai-test-credential'))
     assert(!(await readFile(store.file, 'utf8')).includes('inert-openai-test-credential'))
-    const restored = new ProviderSettingsStore(store.file, credentials)
+    const restored = new ProviderSettingsStore(store.file, credentials, noGemini)
     await restored.restore()
     assert.deepEqual(restored.state.selection, selection)
     assert.throws(() => restored.assertReady(selection), /tool check/)
@@ -124,12 +130,16 @@ test('Ollama rejects nonloopback and redirects, reports stopped/empty/tool-incap
   ])
     assert.throws(() => localOllamaURL(value))
   const dir = await mkdtemp(join(tmpdir(), 'parallax-ollama-'))
-  const store = new ProviderSettingsStore(join(dir, 'settings.json'), {
-    available: false,
-    get: async () => null,
-    set: async () => {},
-    remove: async () => {},
-  })
+  const store = new ProviderSettingsStore(
+    join(dir, 'settings.json'),
+    {
+      available: false,
+      get: async () => null,
+      set: async () => {},
+      remove: async () => {},
+    },
+    noGemini,
+  )
   await store.restore()
   let mode = 'offline'
   const fetchMock = mock.method(

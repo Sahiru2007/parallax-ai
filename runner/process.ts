@@ -28,7 +28,12 @@ export async function command(
   return new Promise((resolve, reject) => {
     const environment = { ...process.env }
     rememberSecret(environment.OPENAI_API_KEY)
+    rememberSecret(environment.GEMINI_API_KEY)
+    rememberSecret(environment.GOOGLE_API_KEY)
     delete environment.OPENAI_API_KEY
+    delete environment.GEMINI_API_KEY
+    delete environment.GOOGLE_API_KEY
+    delete environment.PARALLAX_GEMINI_TEST_URL
     delete environment.PARALLAX_MODEL
     delete environment.PARALLAX_OPENAI_TEST_URL
     const child = spawn(executable, args, {

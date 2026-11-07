@@ -292,12 +292,45 @@ export class CodingEngine {
         state.providerRuns.push(providerRun)
       }
       const recorded = state.providerRuns?.at(-1)
+      let streamEvent: ToolEvent | undefined
       const apiKey =
-        selection?.provider === 'openai' && this.providers ? await this.providers.key() : undefined
+        selection && selection.provider !== 'ollama' && this.providers
+          ? await this.providers.key(selection.provider)
+          : undefined
       await runCodingProvider({
         selection,
         apiKey,
         baseURL: this.providers?.openaiBase,
+        geminiBaseURL: this.providers?.geminiBase,
+        onRound: (round, limit) => {
+          streamEvent = undefined
+          if (recorded) {
+            recorded.rounds = round
+            recorded.maxToolRounds = limit
+          }
+          state.activity = `${selection?.provider ?? 'Model'} · agent round ${round}/${limit}`
+          this.changed(runtime)
+        },
+        onUsage: (usage) => {
+          if (recorded) {
+            recorded.usage ??= {}
+            for (const key of Object.keys(usage) as (keyof typeof usage)[]) {
+              const value = usage[key]
+              if (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+                recorded.usage[key] = (recorded.usage[key] ?? 0) + value
+            }
+            this.changed(runtime)
+          }
+        },
+        onDelta: (text) => {
+          if (!text) return
+          if (!streamEvent) {
+            this.log(runtime, 'agent', `${candidate.name} · streamed model response`, '')
+            streamEvent = state.events.at(-1)!
+          }
+          streamEvent.detail = ((streamEvent.detail ?? '') + text).slice(-150000)
+          this.changed(runtime)
+        },
         onModel: (model) => {
           if (recorded) {
             recorded.actualModel = model
@@ -323,7 +356,13 @@ export class CodingEngine {
             text,
           )
         },
-        execute: (name, args) => this.tool(runtime, candidate, name, args),
+        execute: (name, args) => {
+          if (recorded) {
+            recorded.toolCalls = (recorded.toolCalls ?? 0) + 1
+            this.changed(runtime)
+          }
+          return this.tool(runtime, candidate, name, args)
+        },
       }).then(
         () => {
           if (recorded) recorded.status = 'completed'

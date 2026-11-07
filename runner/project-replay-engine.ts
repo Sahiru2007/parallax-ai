@@ -245,6 +245,8 @@ export async function runProjectBatch(
         )
       const environment = { ...process.env }
       delete environment.OPENAI_API_KEY
+      delete environment.GEMINI_API_KEY
+      delete environment.GOOGLE_API_KEY
       delete environment.PARALLAX_MODEL
       browser = await chromium.launch({ headless: true, timeout: 15_000, env: environment })
       host.signal.throwIfAborted()

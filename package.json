@@ -20,7 +20,8 @@
     "runner": "node --env-file-if-exists=.env runner/server.ts",
     "fixture": "node scripts/fixture.mjs",
     "test:runner": "node --test runner/*.test.ts",
-    "test:coding": "playwright test --config playwright.coding.config.ts"
+    "test:coding": "playwright test --config playwright.coding.config.ts",
+    "test:gemini:live": "node scripts/verify-gemini.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

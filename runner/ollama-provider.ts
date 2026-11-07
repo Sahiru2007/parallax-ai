@@ -1,17 +1,20 @@
 import { redactSecrets } from './provider-secrets.ts'
-export async function runOllamaAgent(options: {
-  task: string
-  model: string
-  endpoint: string
-  signal: AbortSignal
-  history?: { role: 'user' | 'assistant'; content: string }[]
-  instructions?: string
-  tools: unknown[]
-  maxTurns?: number
-  execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
-  onText: (text: string) => void
-  onModel?: (model: string) => void
-}) {
+import type { AgentProgress } from '../shared/providers.ts'
+export async function runOllamaAgent(
+  options: AgentProgress & {
+    task: string
+    model: string
+    endpoint: string
+    signal: AbortSignal
+    history?: { role: 'user' | 'assistant'; content: string }[]
+    instructions?: string
+    tools: unknown[]
+    maxTurns?: number
+    execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
+    onText: (text: string) => void
+    onModel?: (model: string) => void
+  },
+) {
   const messages: unknown[] = [
     { role: 'system', content: options.instructions ?? '' },
     ...(options.history ?? []),
@@ -23,6 +26,7 @@ export async function runOllamaAgent(options: {
   })
   for (let turn = 0; turn < (options.maxTurns ?? 24); turn++) {
     options.signal.throwIfAborted()
+    options.onRound?.(turn + 1, options.maxTurns ?? 24)
     let response: Response
     try {
       response = await fetch(options.endpoint + '/api/chat', {
@@ -43,6 +47,8 @@ export async function runOllamaAgent(options: {
         `Ollama request failed (HTTP ${response.status}). Check that the selected local model is installed and supports tools. No cloud fallback was used.`,
       )
     const payload = (await response.json()) as {
+      prompt_eval_count?: number
+      eval_count?: number
       model?: string
       message?: {
         role: string
@@ -53,6 +59,11 @@ export async function runOllamaAgent(options: {
     if (!payload.message || payload.message.role !== 'assistant')
       throw new Error('Ollama returned an invalid assistant response.')
     if (payload.model) options.onModel?.(payload.model)
+    if (payload.prompt_eval_count !== undefined || payload.eval_count !== undefined)
+      options.onUsage?.({
+        inputTokens: payload.prompt_eval_count,
+        outputTokens: payload.eval_count,
+      })
     const message = payload.message
     messages.push(message)
     if (message.content) options.onText(redactSecrets(message.content))

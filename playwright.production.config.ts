@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
+  outputDir: './artifacts/production-browser-results',
   testDir: './tests/production',
   forbidOnly: !!process.env.CI,
   use: {
