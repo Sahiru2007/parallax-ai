@@ -6,6 +6,8 @@ A local coding-agent workspace. Open a Git checkout, describe a task, continue w
 
 **Step 3:** Compare and Replay now works inside ordinary project sessions for local Chromium apps using HTTP fetch/XHR. See [the project replay guide](docs/step-3.md) for scenario configuration, keyboard/mouse controls, standalone exports, and the separate dashboard acceptance example. `/pickup` remains runnable.
 
+**Step 6:** The [guided scenario editor](docs/step-6.md) covers app setup, user actions, controlled requests, expected behavior, and review/run. Advanced JSON remains available, with draft recovery and compatibility with saved scenarios. [Interrupted-work recovery](docs/step-5.md) retains AI turns and completed evidence independently.
+
 The main screen is the everyday coding workspace. The **pickup-address search race** remains accessible from its sample button or `/pickup`, with the existing two-candidate replay workflow. The earlier seven-screen foundation remains available at `/legacy`. Its native setup reference is preserved in [docs/phase-1-native.md](docs/phase-1-native.md).
 
 ## Launch

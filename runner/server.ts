@@ -18,6 +18,7 @@ import { ProviderSettingsStore } from './provider-settings.ts'
 import { WindowsCredentialStore } from './credentials.ts'
 import { redactSecrets } from './provider-secrets.ts'
 import type { ModelSelection } from '../shared/providers.ts'
+import { replaySuggestions } from './replay-suggestions.ts'
 
 const root = resolve(
   process.env.PARALLAX_REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..'),
@@ -146,6 +147,7 @@ const server = createServer(async (request, response) => {
           data.compare === true,
           data.investigate === true,
           selection,
+          data.sequential === true,
         ),
       )
     }
@@ -153,8 +155,20 @@ const server = createServer(async (request, response) => {
     if (codingMatch) {
       const [, id, action] = codingMatch
       const state = coding.state(id)
+      if (request.method === 'GET' && action === 'replay/suggestions')
+        return json(response, 200, {
+          baseline: state.baseline.digest,
+          suggestions: replaySuggestions(coding.sessions.get(id)!.baseline),
+        })
       if (request.method === 'POST' && action === 'replay/scenario') {
         const data = await body(request)
+        if (
+          'baseDigest' in data &&
+          data.baseDigest !== (state.projectReplay?.saved?.digest ?? null)
+        )
+          throw new Error(
+            'The saved scenario changed in another view. Your draft is retained; review the latest revision before saving.',
+          )
         return json(response, 200, await coding.saveReplay(id, data.scenario))
       }
       if (request.method === 'POST' && action === 'replay/run') {
@@ -170,7 +184,8 @@ const server = createServer(async (request, response) => {
           throw new Error(
             'Configure the live provider before generating fixes. Baseline replay remains available without a key.',
           )
-        return json(response, 202, await coding.generateReplayFixes(id))
+        const data = await body(request)
+        return json(response, 202, await coding.generateReplayFixes(id, data.sequential === true))
       }
       if (request.method === 'POST' && action === 'replay/propose') {
         if (state.provider === 'live' && !state.modelSelection && providers.state.selection)
@@ -235,6 +250,39 @@ const server = createServer(async (request, response) => {
           state.modelSelection = structuredClone(providers.state.selection)
         await coding.followup(id, data.message.trim())
         return json(response, 202, coding.state(id))
+      }
+      if (
+        request.method === 'POST' &&
+        ['resume', 'resolve-tool', 'generate-next'].includes(action ?? '')
+      ) {
+        if (engine.active()) throw new Error('Wait for the active pickup investigation to stop.')
+        const data = await body(request)
+        if (action === 'generate-next') {
+          if (data.candidate !== 'a' && data.candidate !== 'b')
+            throw new Error('Select the queued candidate.')
+          return json(response, 202, await coding.generateNext(id, data.candidate))
+        }
+        if (typeof data.runId !== 'string' || !/^[a-f0-9-]{36}$/.test(data.runId))
+          throw new Error('Select the interrupted AI turn.')
+        if (action === 'resume') {
+          if (data.additional !== undefined && typeof data.additional !== 'number')
+            throw new Error('Additional rounds must be a number.')
+          return json(
+            response,
+            202,
+            await coding.resume(id, data.runId, data.additional as number | undefined),
+          )
+        }
+        if (
+          typeof data.callId !== 'string' ||
+          (data.decision !== 'skip' && data.decision !== 'rerun')
+        )
+          throw new Error('Choose an inspected tool and recovery action.')
+        return json(
+          response,
+          200,
+          await coding.resolveTool(id, data.runId, data.callId, data.decision),
+        )
       }
       if (request.method === 'POST' && action === 'approve') {
         const data = await body(request)

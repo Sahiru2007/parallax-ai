@@ -1,29 +1,72 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CodingSession } from '../../../shared/coding'
 import {
-  newScenario,
+  type ReplayScenario,
   type ProjectReplayRun,
   type ReplayEvent,
 } from '../../../shared/project-replay'
 import type { useCoding } from './useCoding'
 import './project-replay.css'
+import { ScenarioEditor } from './ScenarioEditor'
+import {
+  analyzeDocument,
+  draftFromInput,
+  draftInput,
+  emptyDraft,
+  stableScenario,
+  type AppSuggestion,
+  type ScenarioDocument,
+} from '../../../shared/scenario-editor'
+
+function initialDocument(session: CodingSession): ScenarioDocument {
+  const saved = session.projectReplay?.saved,
+    form = saved ? draftFromInput(saved.scenario) : emptyDraft()
+  const fresh: ScenarioDocument = {
+    form,
+    json: JSON.stringify(draftInput(form), null, 2),
+    mode: 'guided',
+    baseDigest: saved?.digest ?? null,
+  }
+  try {
+    const cached = JSON.parse(
+      localStorage.getItem(`parallax-replay-draft-${session.id}`) ?? 'null',
+    ) as ScenarioDocument | null
+    if (
+      cached &&
+      ['guided', 'json'].includes(cached.mode) &&
+      typeof cached.json === 'string' &&
+      (cached.baseDigest === null || typeof cached.baseDigest === 'string')
+    ) {
+      analyzeDocument(cached)
+      return cached
+    }
+  } catch {
+    /* A malformed local draft cannot replace the saved session. */
+  }
+  return fresh
+}
 
 type Actions = ReturnType<typeof useCoding>
 export function ProjectReplayPanel({
   session,
   api,
   onVersion,
+  onDraftChange,
 }: {
   session: CodingSession
   api: Actions
   onVersion: (version: string) => void
+  onDraftChange: (dirty: boolean) => void
 }) {
   const replay = session.projectReplay,
     saved = replay?.saved
-  const [draft, setDraft] = useState(() =>
-    JSON.stringify(saved?.scenario ?? replay?.proposal ?? newScenario, null, 2),
-  )
-  const [editorError, setEditorError] = useState('')
+  const [doc, setDoc] = useState(() => initialDocument(session))
+  const [saving, setSaving] = useState(false),
+    [saveFailure, setSaveFailure] = useState(''),
+    [draftStorageError, setDraftStorageError] = useState('')
+  const [suggestions, setSuggestions] = useState<AppSuggestion[]>([]),
+    [suggestionsError, setSuggestionsError] = useState('')
+  const [reviewingProposal, setReviewingProposal] = useState(false)
   const [version, setVersion] = useState('baseline')
   const [selected, setSelected] = useState('final')
   const [orderDraft, setOrderDraft] = useState<string[] | null>(() => {
@@ -35,19 +78,77 @@ export function ProjectReplayPanel({
     }
   })
   const editor = useRef<HTMLDetailsElement>(null)
+  const autoOpened = useRef(false)
   const ids = saved?.scenario.requests.map((r) => r.id) ?? []
   const order =
     orderDraft && orderDraft.length === ids.length && ids.every((id) => orderDraft.includes(id))
       ? orderDraft
       : (replay?.order ?? [])
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(draft)
-  } catch {
-    parsed = null
-  }
-  const unsaved = Boolean(saved && JSON.stringify(parsed) !== JSON.stringify(saved.scenario))
+  const analyzed = analyzeDocument(doc)
+  const conflict = doc.baseDigest !== (saved?.digest ?? null)
+  const unsaved =
+    conflict ||
+    !saved ||
+    !analyzed.input ||
+    stableScenario(analyzed.input) !== stableScenario(saved.scenario)
   const changedOrder = Boolean(saved && order.join() !== replay?.order.join())
+  const [initiallyOpen] = useState(() => !saved || unsaved || conflict)
+  useEffect(() => {
+    onDraftChange(Boolean(saved && (unsaved || changedOrder)))
+  }, [onDraftChange, saved, unsaved, changedOrder])
+  function updateDocument(next: ScenarioDocument) {
+    setDoc(next)
+    try {
+      localStorage.setItem(`parallax-replay-draft-${session.id}`, JSON.stringify(next))
+      setDraftStorageError('')
+    } catch {
+      setDraftStorageError(
+        'This draft could not be stored on this device. Keep this view open until you can save it to the session.',
+      )
+    }
+  }
+  useEffect(() => {
+    const abort = new AbortController()
+    void fetch(`/api/coding/sessions/${session.id}/replay/suggestions`, { signal: abort.signal })
+      .then(async (r) => {
+        if (!r.ok)
+          throw new Error('Setup detection is unavailable; enter the app command manually.')
+        return r.json()
+      })
+      .then((value) => {
+        setSuggestions(value.suggestions ?? [])
+        setSuggestionsError('')
+      })
+      .catch((e) => {
+        if (!abort.signal.aborted)
+          setSuggestionsError(e instanceof Error ? e.message : 'Setup detection failed.')
+      })
+    return () => abort.abort()
+  }, [session.id])
+  const lastReplay = replay?.runs.at(-1)
+  const startupError =
+    lastReplay?.status === 'error' &&
+    /app|start|readiness|prepar|approval|port|command/i.test(lastReplay.error ?? '')
+      ? lastReplay
+      : undefined
+  const appApproval =
+    session.approval &&
+    /^(Prepare this isolated|Start .* from its isolated)/.test(session.approval.detail)
+  const hasStartupError = Boolean(startupError)
+  useEffect(() => {
+    const element = editor.current
+    if (!element) return
+    if (hasStartupError || conflict) {
+      element.open = true
+      autoOpened.current = false
+    } else if (appApproval && !element.open) {
+      element.open = true
+      autoOpened.current = true
+    } else if (!session.busy && autoOpened.current) {
+      element.open = false
+      autoOpened.current = false
+    }
+  }, [appApproval, session.approval?.id, hasStartupError, startupError?.id, conflict, session.busy])
   const candidates = [
     { id: 'baseline', name: 'Baseline', digest: session.baseline.digest },
     ...session.candidates,
@@ -108,18 +209,55 @@ export function ProjectReplayPanel({
     next.splice(target, 0, id)
     reorder(next)
   }
-  async function save() {
-    setEditorError('')
+  function resetDraft() {
+    const form = saved ? draftFromInput(saved.scenario) : emptyDraft()
+    updateDocument({
+      form,
+      json: JSON.stringify(draftInput(form), null, 2),
+      mode: 'guided',
+      baseDigest: saved?.digest ?? null,
+    })
+    setSaveFailure('')
+  }
+  async function save(value: ReplayScenario, run: boolean) {
+    setSaveFailure('')
+    setSaving(true)
     try {
-      const value = JSON.parse(draft)
-      const result = await api.saveScenario(value)
+      const result = await api.saveScenario(value, doc.baseDigest)
       if (result?.projectReplay?.saved) {
-        setDraft(JSON.stringify(result.projectReplay.saved.scenario, null, 2))
+        const next = result.projectReplay.saved
+        updateDocument({
+          form: draftFromInput(next.scenario),
+          json: JSON.stringify(next.scenario, null, 2),
+          mode: doc.mode,
+          baseDigest: next.digest,
+        })
         setOrderDraft(null)
         localStorage.removeItem(`parallax-replay-order-${session.id}`)
-      }
+        if (editor.current) {
+          editor.current.open = false
+          autoOpened.current = false
+        }
+        if (run) {
+          setVersion('baseline')
+          const execution = await api.replayProject(next.scenario.order, 'baseline')
+          if (!execution) {
+            setSaveFailure('Replay could not start.')
+            if (editor.current) editor.current.open = true
+            return
+          }
+        }
+        if (editor.current) {
+          requestAnimationFrame(() => {
+            if (run) document.getElementById(`replay-run-${session.id}`)?.focus()
+            else editor.current?.querySelector<HTMLElement>(':scope > summary')?.focus()
+          })
+        }
+      } else setSaveFailure('The scenario was not saved.')
     } catch (problem) {
-      setEditorError(problem instanceof Error ? problem.message : String(problem))
+      setSaveFailure(problem instanceof Error ? problem.message : String(problem))
+    } finally {
+      setSaving(false)
     }
   }
   const displayedOrder = run && !run.order.every((id) => order.includes(id)) ? run.order : order
@@ -150,7 +288,7 @@ export function ProjectReplayPanel({
           Refresh evidence
         </button>
       </div>
-      <details className="replay-editor" open={!saved} ref={editor}>
+      <details className="replay-editor" open={initiallyOpen} ref={editor}>
         <summary>
           Replay scenario{' '}
           {saved
@@ -158,45 +296,48 @@ export function ProjectReplayPanel({
             : '· configure app, actions, requests, and expected UI'}
         </summary>
         <p>
-          Use a local HTTP origin and {'{PORT}'} for an isolated app port. Match requests by exact
-          URL, method, and optional body. Checkpoints read real DOM text after body consumption, two
-          paint frames, and settleMs. Projects without worktree dependencies can add app.prepare
-          (executable/args, for example npm ci); it requires approval before each app launch.
+          {!saved
+            ? 'Build a replay in five steps. No app command runs until you request a replay and approve it.'
+            : unsaved
+              ? 'Unsaved scenario changes — evidence is stale until saved and rerun. Draft retained on this device.'
+              : `Saved scenario r${saved.revision}. Replaying uses the timeline delivery order; saving a new draft uses its reviewed delivery order.`}
         </p>
-        <button disabled={session.busy} onClick={() => void api.proposeReplay()}>
-          Ask agent for scenario
-        </button>
-        {replay?.proposal && (
-          <button
-            disabled={session.busy}
-            onClick={() => {
-              setDraft(JSON.stringify(replay.proposal, null, 2))
-              if (editor.current) editor.current.open = true
-            }}
-          >
-            Review agent proposal
+        <div className="scenario-agent-actions">
+          <button disabled={session.busy} onClick={() => void api.proposeReplay()}>
+            Ask agent for scenario
           </button>
-        )}
-        <textarea
-          aria-label="Replay scenario JSON"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          disabled={session.busy}
-          spellCheck={false}
-        />
-        <div>
-          <button className="cut-primary" disabled={session.busy} onClick={() => void save()}>
-            Save scenario
-          </button>
-          <span>
-            {!saved
-              ? 'Template — edit for your app before saving.'
-              : unsaved
-                ? 'Unsaved scenario changes — save before replay.'
-                : 'Saved with this session.'}
-          </span>
+          {replay?.proposal && (
+            <button
+              disabled={session.busy}
+              onClick={() => {
+                setReviewingProposal(true)
+                if (editor.current) editor.current.open = true
+              }}
+            >
+              Review agent proposal
+            </button>
+          )}
         </div>
-        {editorError && <p role="alert">{editorError}</p>}
+        <ScenarioEditor
+          document={doc}
+          onChange={(next) => {
+            updateDocument(next)
+            setSaveFailure('')
+          }}
+          session={session}
+          suggestions={suggestions}
+          suggestionsError={suggestionsError}
+          proposal={replay?.proposal}
+          reviewingProposal={reviewingProposal}
+          onCloseProposal={() => setReviewingProposal(false)}
+          onSave={save}
+          onReset={resetDraft}
+          conflict={conflict}
+          onReviewLatest={() => updateDocument({ ...doc, baseDigest: saved?.digest ?? null })}
+          saving={saving}
+          saveError={saveFailure ? `${saveFailure} ${api.error}` : ''}
+          draftStorageError={draftStorageError}
+        />
       </details>
       {saved && (
         <>
@@ -241,6 +382,7 @@ export function ProjectReplayPanel({
               <span data-testid="project-order">{order.join(' → ')}</span>
             </div>
             <button
+              id={`replay-run-${session.id}`}
               disabled={session.busy || unsaved}
               onClick={() => void api.replayProject(order, version)}
             >
@@ -270,6 +412,12 @@ export function ProjectReplayPanel({
               onClick={() => void api.generateFixes()}
             >
               Generate two fixes
+            </button>
+            <button
+              disabled={session.busy || !saved || unsaved}
+              onClick={() => void api.generateFixes(true)}
+            >
+              Generate Candidate A first
             </button>
             {session.busy && <button onClick={() => void api.cancel()}>Cancel replay</button>}
           </div>

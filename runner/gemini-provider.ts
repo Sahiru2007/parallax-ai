@@ -1,6 +1,15 @@
 import type { AgentProgress, TokenUsage } from '../shared/providers.ts'
 import { rememberSecret, redactSecrets, secretStream } from './provider-secrets.ts'
 
+import {
+  drainPending,
+  preparePending,
+  RecoveryRequired,
+  type Continuation,
+  type DurableExecute,
+} from './continuation.ts'
+import { providerRequest } from './provider-retry.ts'
+
 const root = 'https://generativelanguage.googleapis.com/v1beta'
 export function preferGeminiModels(models: string[]) {
   const score = (id: string) =>
@@ -127,7 +136,8 @@ export async function runGeminiAgent(
     instructions?: string
     tools: unknown[]
     maxTurns?: number
-    execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
+    continuation?: Continuation
+    execute: DurableExecute
     onText: (text: string) => void
     onModel?: (model: string) => void
   },
@@ -140,37 +150,81 @@ export async function runGeminiAgent(
     const { name, description, parameters } = entry as Record<string, unknown>
     return { name, description, parametersJsonSchema: parameters }
   })
-  const contents: unknown[] = [
+  const c = options.continuation
+  const contents: unknown[] = c?.state.context ?? [
     ...(options.history ?? []).map((item) => ({
       role: item.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: item.content }],
     })),
     { role: 'user', parts: [{ text: options.task }] },
   ]
-  const limit = options.maxTurns ?? 12
-  for (let round = 1; round <= limit; round++) {
+  if (c) {
+    c.state.context = contents
+    await c.save()
+    if (c.state.complete) return
+  }
+  const settle = async () => {
+    if (!c?.state.pending) return
+    const results = await drainPending(c, options.execute)
+    contents.push({
+      role: 'user',
+      parts: results.map(({ call, result }) => ({
+        functionResponse: {
+          ...(call.id ? { id: call.id } : {}),
+          name: call.name,
+          response: { result: result ?? null },
+        },
+      })),
+    })
+    c.state.pending = undefined
+    await c.save()
+  }
+  await settle()
+  if (c?.state.inspection) {
+    contents.push({ role: 'user', parts: [{ text: c.state.inspection }] })
+    c.state.inspection = undefined
+    await c.save()
+  }
+  const limit = c?.state.allowance ?? options.maxTurns ?? 12
+  for (let round = (c?.state.rounds ?? 0) + 1; round <= limit; round++) {
     options.signal.throwIfAborted()
+    if (c) {
+      c.state.rounds = round
+      await c.save()
+    }
     options.onRound?.(round, limit)
     let response: Response
     try {
-      response = await fetch(`${options.baseURL ?? root}/${model}:streamGenerateContent?alt=sse`, {
-        method: 'POST',
-        redirect: 'error',
-        signal: AbortSignal.any([options.signal, AbortSignal.timeout(120000)]),
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': options.apiKey },
-        body: JSON.stringify({
-          contents,
-          systemInstruction: {
-            parts: [
-              { text: options.instructions ?? 'Use the supplied tools to complete the user task.' },
-            ],
-          },
-          tools: [{ functionDeclarations: declarations }],
-          toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
-          generationConfig: { candidateCount: 1, maxOutputTokens: 8192 },
-        }),
-      })
-    } catch {
+      response = await providerRequest(
+        'gemini',
+        (requestSignal) =>
+          fetch(`${options.baseURL ?? root}/${model}:streamGenerateContent?alt=sse`, {
+            method: 'POST',
+            redirect: 'error',
+            signal: AbortSignal.any([requestSignal, AbortSignal.timeout(120000)]),
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': options.apiKey },
+            body: JSON.stringify({
+              contents,
+              systemInstruction: {
+                parts: [
+                  {
+                    text:
+                      c?.state.instructions ??
+                      options.instructions ??
+                      'Use the supplied tools to complete the user task.',
+                  },
+                ],
+              },
+              tools: [{ functionDeclarations: declarations }],
+              toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+              generationConfig: { candidateCount: 1, maxOutputTokens: 8192 },
+            }),
+          }),
+        options.signal,
+        c,
+      )
+    } catch (error) {
+      if (error instanceof RecoveryRequired) throw error
       options.signal.throwIfAborted()
       throw new Error(
         'Gemini is unreachable or timed out. Check the network and retry; no fallback provider was used.',
@@ -228,19 +282,38 @@ export async function runGeminiAgent(
           : 'Gemini response did not finish successfully. No tool calls from it were executed.',
       )
     if (!parts.length) throw new Error('Gemini returned an empty response.')
-    contents.push({ role: 'model', parts })
-    if (text.trim()) options.onText(redactSecrets(text))
     const calls = parts.flatMap((part) => (part.functionCall ? [part.functionCall] : []))
-    if (!calls.length) return
     if (calls.length > 24)
       throw new Error(
-        'Gemini requested too many tools in a single round. Partial changes remain available.',
+        'Gemini requested too many tools in a single round. No tools from this response were executed.',
       )
-    const ids = calls.flatMap((c) => (c.id ? [c.id] : []))
+    const ids = calls.flatMap((call) => (call.id ? [call.id] : []))
     if (new Set(ids).size !== ids.length)
       throw new Error(
         'Gemini repeated a function-call ID. No tools from this response were executed.',
       )
+    contents.push({ role: 'model', parts })
+    if (text.trim()) options.onText(redactSecrets(text))
+    if (!calls.length) {
+      if (c) {
+        c.state.complete = true
+        await c.save()
+      }
+      return
+    }
+    if (c) {
+      await preparePending(
+        c,
+        calls.map((call) => ({
+          name: call.name,
+          id: call.id,
+          args: JSON.parse(redactSecrets(JSON.stringify(call.args ?? {}))),
+        })),
+        round,
+      )
+      await settle()
+      continue
+    }
     const responses: unknown[] = []
     for (const call of calls) {
       options.signal.throwIfAborted()
@@ -264,7 +337,8 @@ export async function runGeminiAgent(
     }
     contents.push({ role: 'user', parts: responses })
   }
-  throw new Error(
-    `Gemini reached the ${limit}-round agent limit. It stopped without retrying; partial changes and checks remain available for review.`,
-  )
+  throw new RecoveryRequired({
+    kind: 'limit',
+    message: `Gemini reached the ${limit}-round agent limit. Explicitly continue with an additional bounded allowance; partial changes and checks remain available.`,
+  })
 }

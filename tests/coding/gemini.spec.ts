@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { command } from '../../runner/process.ts'
 import { sourceSnapshot } from '../../runner/coding-files.ts'
 import { WindowsCredentialStore } from '../../runner/credentials.ts'
+import { scenarioView } from './scenario-editor-helpers.ts'
 import type { CodingConfig, CodingSession } from '../../shared/coding.ts'
 import {
   createGeminiAcceptanceRepo,
@@ -212,8 +213,9 @@ async function acceptance(page: Page, base: string, runnerURL: string, dir: stri
   await page.getByLabel('Coding task', { exact: true }).fill(replayTask)
   await page.getByRole('checkbox', { name: 'Investigate browser behavior' }).check()
   await page.getByRole('button', { name: 'Start investigation', exact: true }).click()
-  await expect(page.getByLabel('Replay scenario JSON')).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Project browser replay' })).toBeVisible()
   await finish()
+  await scenarioView(page, 'json')
   await page.getByLabel('Replay scenario JSON').fill(JSON.stringify(geminiScenario))
   await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
   await expect(page.locator('.replay-editor')).toContainText('Replay scenario r1')

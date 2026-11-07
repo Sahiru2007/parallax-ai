@@ -1,5 +1,13 @@
 import { rememberSecret, redactSecrets } from './provider-secrets.ts'
 import type { AgentProgress } from '../shared/providers.ts'
+import {
+  drainPending,
+  preparePending,
+  RecoveryRequired,
+  type Continuation,
+  type DurableExecute,
+} from './continuation.ts'
+import { providerRequest } from './provider-retry.ts'
 interface FunctionCall {
   type: 'function_call'
   call_id: string
@@ -75,7 +83,8 @@ export async function runLiveAgent(
     strategy: string
     signal: AbortSignal
     steering: () => string[]
-    execute: (name: string, args: Record<string, unknown>) => Promise<unknown>
+    execute: DurableExecute
+    continuation?: Continuation
     onText: (text: string) => void
     instructions?: string
     tools?: unknown[]
@@ -94,36 +103,75 @@ export async function runLiveAgent(
     throw new Error(
       'Live mode requires OPENAI_API_KEY and PARALLAX_MODEL in the runner environment. No prewritten fallback was used.',
     )
-  const input: unknown[] = [...(options.history ?? []), { role: 'user', content: options.task }]
+  const c = options.continuation
+  const input: unknown[] = c?.state.context ?? [
+    ...(options.history ?? []),
+    { role: 'user', content: options.task },
+  ]
+  if (c) {
+    c.state.context = input
+    await c.save()
+    if (c.state.complete) return
+  }
+  const settle = async () => {
+    if (!c?.state.pending) return
+    const results = await drainPending(c, options.execute)
+    input.push(
+      ...results.map(({ call, result }) => ({
+        type: 'function_call_output',
+        call_id: call.id,
+        output: JSON.stringify(result),
+      })),
+    )
+    c.state.pending = undefined
+    await c.save()
+  }
+  await settle()
+  if (c?.state.inspection) {
+    input.push({ role: 'user', content: c.state.inspection })
+    c.state.inspection = undefined
+    await c.save()
+  }
   let steeringCount = 0
-  const maxTurns = options.maxTurns ?? 12
-  for (let turn = 0; turn < maxTurns; turn++) {
+  const maxTurns = c?.state.allowance ?? options.maxTurns ?? 12
+  for (let turn = c?.state.rounds ?? 0; turn < maxTurns; turn++) {
     options.signal.throwIfAborted()
+    if (c) {
+      c.state.rounds = turn + 1
+      await c.save()
+    }
     options.onRound?.(turn + 1, maxTurns)
     const steering = options.steering()
     for (const text of steering.slice(steeringCount))
       input.push({ role: 'user', content: `Developer steering: ${text}` })
     steeringCount = steering.length
-    const response = await fetch((options.baseURL ?? 'https://api.openai.com/v1') + '/responses', {
-      method: 'POST',
-      redirect: 'error',
-      signal: AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]),
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        include: ['reasoning.encrypted_content'],
-        max_output_tokens: 8192,
-        store: false,
-        tools: options.tools ?? tools,
-        instructions:
-          options.instructions ??
-          `You are PARALLAX's coding agent. Work only in the supplied detached candidate worktree. Inspect files, implement a fix, invoke run_checks, and inspect_diff before concluding. Candidate strategy: ${options.strategy}. The reproducible fixture uses Col then Colombo; both response orders must keep the Colombo results. Only fixtures/pickup-search/src/useAddressSearch.ts is writable in this first vertical slice. Do not edit tests, instrumentation, package manifests, or the active checkout. Report real evidence; never claim checks ran without the run_checks tool.`,
-        input,
-      }),
-    })
+    const response = await providerRequest(
+      'openai',
+      (requestSignal) =>
+        fetch((options.baseURL ?? 'https://api.openai.com/v1') + '/responses', {
+          method: 'POST',
+          redirect: 'error',
+          signal: AbortSignal.any([requestSignal, AbortSignal.timeout(120_000)]),
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            include: ['reasoning.encrypted_content'],
+            max_output_tokens: 8192,
+            store: false,
+            tools: options.tools ?? tools,
+            instructions:
+              c?.state.instructions ??
+              options.instructions ??
+              `You are PARALLAX's coding agent. Work only in the supplied detached candidate worktree. Inspect files, implement a fix, invoke run_checks, and inspect_diff before concluding. Candidate strategy: ${options.strategy}. The reproducible fixture uses Col then Colombo; both response orders must keep the Colombo results. Only fixtures/pickup-search/src/useAddressSearch.ts is writable in this first vertical slice. Do not edit tests, instrumentation, package manifests, or the active checkout. Report real evidence; never claim checks ran without the run_checks tool.`,
+            input,
+          }),
+        }),
+      options.signal,
+      c,
+    )
     if (!response.ok)
       throw new Error(
         `OpenAI provider request failed (HTTP ${response.status}). Check the runner's credentials, model access, and quota.`,
@@ -138,18 +186,44 @@ export async function runLiveAgent(
         outputTokens: payload.usage.output_tokens,
         totalTokens: payload.usage.total_tokens,
       })
-    // Replay all output items, including reasoning, to preserve stateless tool-call context.
-    input.push(...payload.output)
     const calls = payload.output.filter(
       (item): item is FunctionCall => item.type === 'function_call',
     )
+    let pendingCalls
+    try {
+      if (calls.length > 24 || new Set(calls.map((call) => call.call_id)).size !== calls.length)
+        throw new Error('Invalid tool calls')
+      pendingCalls = calls.map((call) => {
+        const args = JSON.parse(redactSecrets(call.arguments)) as Record<string, unknown>
+        if (!call.call_id || !call.name || !args || typeof args !== 'object' || Array.isArray(args))
+          throw new Error('Invalid tool arguments')
+        return { name: call.name, id: call.call_id, args }
+      })
+    } catch {
+      throw new Error(
+        'OpenAI returned invalid tool calls. No tools from this response were executed; resume retains the previous valid context.',
+      )
+    }
+    // Validate before retaining output so malformed calls cannot poison a resumed conversation.
+    input.push(...payload.output)
     for (const item of payload.output) {
       if (item.type === 'message' && 'content' in item) {
         for (const content of item.content)
           if (content.text) options.onText(redactSecrets(content.text))
       }
     }
-    if (!calls.length) return
+    if (!calls.length) {
+      if (c) {
+        c.state.complete = true
+        await c.save()
+      }
+      return
+    }
+    if (c) {
+      await preparePending(c, pendingCalls, turn + 1)
+      await settle()
+      continue
+    }
     for (const call of calls) {
       let result: unknown
       try {
@@ -168,7 +242,8 @@ export async function runLiveAgent(
       })
     }
   }
-  throw new Error(
-    `Live agent reached the ${maxTurns}-turn limit. The partial candidate remains available for review.`,
-  )
+  throw new RecoveryRequired({
+    kind: 'limit',
+    message: `Live agent reached the ${maxTurns}-turn limit. Explicitly continue with an additional bounded allowance. The partial candidate remains available.`,
+  })
 }

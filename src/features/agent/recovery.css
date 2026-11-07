@@ -1,0 +1,54 @@
+.candidate-recovery {
+  margin: 0 0 18px;
+  padding: 16px;
+  border: 1px solid #626744;
+  background: #24291e;
+  color: #ded8c4;
+}
+.candidate-recovery p {
+  margin: 8px 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.recovery-statuses {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.recovery-statuses strong {
+  color: #ddbe81;
+}
+.recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  padding: 8px 0;
+}
+.recovery-actions label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.recovery-actions input[type='number'] {
+  width: 75px;
+  color: inherit;
+  background: #191b18;
+  border: 1px solid #747951;
+  padding: 7px;
+}
+.recovery-receipt {
+  border-top: 1px solid #51583b;
+  padding: 12px 0;
+}
+.recovery-receipt pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
+@media (max-width: 700px) {
+  .recovery-statuses {
+    grid-template-columns: 1fr;
+  }
+}

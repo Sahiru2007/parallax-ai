@@ -64,6 +64,8 @@ export interface CodingSession {
   candidates: CodingCandidate[]
   approval?: CommandApproval
   error?: string
+  sequential?: boolean
+  generation?: { turn: number; queued: string[] }
   applied?: { path: string; digest: string; at: string }
 }
 export interface CodingConfig {

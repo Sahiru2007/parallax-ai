@@ -237,7 +237,9 @@ test('ordinary repo feature, follow-up, approved commands, transactional apply, 
   try {
     await waitFor(base)
     await page.goto(base)
-    await expect(page.getByText('Runner connected', { exact: true })).toBeVisible()
+    await expect(page.getByText('Runner connected', { exact: true })).toBeVisible({
+      timeout: 15000,
+    })
     await page.getByRole('textbox', { name: 'Local repository path' }).fill(repo)
     await page.getByRole('button', { name: 'Open repository', exact: true }).click()
     await expect(page.locator('.coding-baseline')).toContainText(original.revision)

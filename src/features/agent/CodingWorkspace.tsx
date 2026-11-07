@@ -3,6 +3,7 @@ import { Logo } from '../../components/ui'
 import { useCoding } from './useCoding'
 import { ProjectReplayPanel } from './ProjectReplayPanel'
 import { ProviderSettingsPanel } from './ProviderSettingsPanel'
+import { CandidateRecovery } from './CandidateRecovery'
 import { providerName, type ProviderId } from '../../../shared/providers'
 import './studio.css'
 import './coding.css'
@@ -13,6 +14,7 @@ export default function CodingWorkspace() {
   const [task, setTask] = useState('')
   const [followup, setFollowup] = useState('')
   const [compare, setCompare] = useState(false)
+  const [sequential, setSequential] = useState(false)
   const [investigate, setInvestigate] = useState(false)
   const [showReplay, setShowReplay] = useState(false)
   const [providerChoice, setProvider] = useState<'live' | 'test' | null>(null)
@@ -24,6 +26,7 @@ export default function CodingWorkspace() {
     providerChoice ??
     (api.config?.testProvider && !selection && !api.config.live.configured ? 'test' : 'live')
   const [candidateId, setCandidate] = useState('a')
+  const [replayDraftSession, setReplayDraftSession] = useState('')
   const [file, setFile] = useState('')
   const [targetChoice, setTarget] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -37,7 +40,7 @@ export default function CodingWorkspace() {
   async function start() {
     setSending(true)
     try {
-      await api.start(task, provider, compare, investigate)
+      await api.start(task, provider, compare, investigate, sequential)
     } finally {
       setSending(false)
     }
@@ -174,6 +177,16 @@ export default function CodingWorkspace() {
                 />{' '}
                 Compare approaches
               </label>
+              {compare && (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={sequential}
+                    onChange={(e) => setSequential(e.target.checked)}
+                  />{' '}
+                  Generate A, then B manually
+                </label>
+              )}
               <label>
                 <input
                   type="checkbox"
@@ -336,6 +349,8 @@ export default function CodingWorkspace() {
             </div>
             {session.approval && (
               <section
+                id="coding-command-approval"
+                tabIndex={-1}
                 className="coding-approval"
                 aria-label="Command approval"
                 data-request-id={session.approval.id}
@@ -379,11 +394,18 @@ export default function CodingWorkspace() {
             </form>
           </aside>
           <section className="coding-review" aria-label="Changes and checks">
+            <CandidateRecovery
+              session={session}
+              candidateId={candidateId}
+              api={api}
+              replayDraftDirty={replayDraftSession === session.id}
+            />
             {showReplay || session.investigation || session.projectReplay ? (
               <ProjectReplayPanel
                 key={session.id}
                 session={session}
                 api={api}
+                onDraftChange={(dirty) => setReplayDraftSession(dirty ? session.id : '')}
                 onVersion={(version) => {
                   if (version !== 'baseline') setCandidate(version)
                 }}

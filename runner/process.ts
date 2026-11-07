@@ -22,11 +22,16 @@ export async function command(
   executable: string,
   args: string[],
   signal?: AbortSignal,
-  options: { timeoutMs?: number; onOutput?: (text: string) => void } = {},
+  options: {
+    timeoutMs?: number
+    onOutput?: (text: string) => void
+    onSpawn?: (pid: number) => void
+  } = {},
 ): Promise<CommandResult> {
   signal?.throwIfAborted()
   return new Promise((resolve, reject) => {
     const environment = { ...process.env }
+    delete environment.NODE_TEST_CONTEXT
     rememberSecret(environment.OPENAI_API_KEY)
     rememberSecret(environment.GEMINI_API_KEY)
     rememberSecret(environment.GOOGLE_API_KEY)
@@ -43,6 +48,7 @@ export async function command(
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     })
+    if (child.pid) options.onSpawn?.(child.pid)
     let output = ''
     let stdout = '',
       stderr = ''

@@ -10,6 +10,7 @@ import { command, git } from '../../runner/process.ts'
 import { sourceSnapshot } from '../../runner/coding-files.ts'
 import type { CodingSession } from '../../shared/coding.ts'
 import type { ReplayScenario } from '../../shared/project-replay.ts'
+import { scenarioView } from './scenario-editor-helpers.ts'
 
 const root = process.cwd()
 async function freePort() {
@@ -43,6 +44,7 @@ async function ready(url: string) {
   throw new Error(`Server not ready: ${url}`)
 }
 test.setTimeout(300_000)
+test.use({ actionTimeout: 15000 })
 
 test('configure a real dashboard investigation, reorder and compare, export, invalidate, and recover', async ({
   page,
@@ -283,9 +285,7 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     throw new Error('Replay did not finish')
   }
   async function save(value: ReplayScenario) {
-    const details = page.locator('.replay-editor')
-    if (!(await details.evaluate((e) => (e as HTMLDetailsElement).open)))
-      await details.locator('summary').click()
+    await scenarioView(page, 'json')
     await page
       .getByRole('textbox', { name: 'Replay scenario JSON' })
       .fill(JSON.stringify(value, null, 2))
@@ -320,8 +320,7 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     await page.getByRole('textbox', { name: 'Local repository path' }).fill(repo)
     await page.getByRole('button', { name: 'Open repository', exact: true }).click()
     await page.getByRole('checkbox', { name: 'Investigate browser behavior' }).check()
-    const cfg = await (await fetch(runnerURL + '/api/coding/config')).json(),
-      live = cfg.live.configured === true
+    const live = false // Editor acceptance is independent of live provider availability.
     await page
       .getByRole('combobox', { name: 'Coding provider' })
       .selectOption(live ? 'live' : 'test')
@@ -333,17 +332,139 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     await page.getByRole('button', { name: 'Start investigation', exact: true }).click()
     await expect(page.getByRole('region', { name: 'Project browser replay' })).toBeVisible()
     await finish()
+    // Create the first saved scenario entirely with guided fields, before asking for a proposal.
+    await scenarioView(page, 'guided')
+    await page.getByLabel('Scenario name', { exact: true }).fill(scenario.name)
+    await page.getByText(/Detected setup suggestions/).click()
+    const setup = page
+      .locator('.scenario-suggestions > div')
+      .filter({ hasText: 'Node app: dashboard.cjs' })
+    await expect(setup).toBeVisible()
+    await setup.getByRole('button').click()
+    await expect(page.getByLabel('Start command', { exact: true })).toHaveValue(
+      'node dashboard.cjs {PORT}',
+    )
+    await page.getByLabel('Page path', { exact: true }).fill('/dashboard')
+    await page.getByText('Startup options', { exact: true }).click()
+    await page.getByLabel('Readiness path', { exact: true }).fill('/health')
+    await page
+      .getByRole('checkbox', { name: 'Run a preparation command before each app start' })
+      .check()
+    await page.getByLabel('Preparation command', { exact: true }).fill('node --check dashboard.js')
+    await page.getByRole('button', { name: '3. Controlled requests', exact: true }).click()
+    for (let i = 0; i < scenario.requests.length; i++) {
+      const request = scenario.requests[i]
+      await page.getByRole('button', { name: 'Add controlled request', exact: true }).click()
+      const row = page.getByRole('article', { name: `Controlled request ${i + 1}`, exact: true })
+      await expect(row.getByLabel('Request name', { exact: true })).toBeFocused()
+      await row.getByLabel('Request name', { exact: true }).fill(request.label)
+      await row.getByLabel('Exact request URL', { exact: true }).fill(request.url)
+      await row
+        .getByLabel('JSON response fixture', { exact: true })
+        .fill(JSON.stringify(request.json))
+      await row.getByText('Request matching options', { exact: true }).click()
+      await row.getByLabel('Request ID', { exact: true }).fill(request.id)
+    }
+    await page.getByRole('button', { name: '2. User actions', exact: true }).click()
+    for (let i = 0; i < scenario.actions.length; i++) {
+      const action = scenario.actions[i]
+      await page.getByRole('button', { name: 'Add action', exact: true }).focus()
+      await page.keyboard.press('Enter')
+      const row = page.getByRole('article', { name: `Action ${i + 1}`, exact: true })
+      await expect(row.getByLabel('Action name', { exact: true })).toBeFocused()
+      await row.getByLabel('Action name', { exact: true }).fill(action.label)
+      await row.getByLabel('Element selector', { exact: true }).fill(action.selector)
+      await row.getByLabel('Wait for request', { exact: true }).selectOption(action.waitForRequest!)
+      await row.getByText('Action identifier and retained options', { exact: true }).click()
+      await row.getByLabel('Action ID', { exact: true }).fill(action.id)
+    }
+    // Move with keyboard, then restore the intended action order.
+    await page.getByRole('button', { name: 'Move action 2 earlier', exact: true }).focus()
+    await page.keyboard.press('Enter')
+    await expect(
+      page
+        .getByRole('article', { name: 'Action 1', exact: true })
+        .getByLabel('Action name', { exact: true }),
+    ).toBeFocused()
+    await page.getByRole('button', { name: 'Move action 1 later', exact: true }).click()
+    await page.getByRole('button', { name: '4. Expected behavior', exact: true }).click()
+    await page
+      .getByRole('textbox', { name: 'Expected behavior', exact: true })
+      .fill(scenario.expected.description)
+    await page
+      .getByLabel('Observed element selector', { exact: true })
+      .fill(scenario.expected.selector)
+    for (let i = 0; i < scenario.expected.texts.length; i++) {
+      await page.getByRole('button', { name: 'Add expected text', exact: true }).click()
+      await page
+        .getByLabel(`Expected text ${i + 1}`, { exact: true })
+        .fill(scenario.expected.texts[i])
+    }
+    await page.getByLabel('Start checking after response', { exact: true }).selectOption('month')
+    await page.getByText('Checkpoint timing', { exact: true }).click()
+    await page.getByLabel('UI settle time (ms)', { exact: true }).fill('80')
+    await page.getByLabel('Replay timeout (ms)', { exact: true }).fill('4000')
+    await page.getByRole('button', { name: '5. Review and run', exact: true }).click()
+    await page.getByRole('button', { name: 'Deliver response month earlier', exact: true }).click()
+    await expect(page.getByRole('region', { name: 'Review and run', exact: true })).toContainText(
+      'Monthly metrics → Weekly metrics',
+    )
+    await page.setViewportSize({ width: 780, height: 1000 })
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true)
+    await page.screenshot({ path: join(dir, 'guided-review-narrow.png'), fullPage: true })
+    await page.setViewportSize({ width: 1500, height: 1000 })
+    const saveRoute = '**/api/coding/sessions/*/replay/scenario'
+    await page.route(saveRoute, (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Controlled save failure: retry without losing the draft.' }),
+      }),
+    )
+    await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
+    await expect(page.locator('.scenario-guided')).toContainText('Controlled save failure')
+    expect((await state()).projectReplay?.saved).toBeUndefined()
+    await page.unroute(saveRoute)
+    await page.reload()
+    await scenarioView(page, 'guided')
+    await expect(page.getByLabel('Scenario name', { exact: true })).toHaveValue(scenario.name)
+    await expect(page.getByLabel('Start command', { exact: true })).toHaveValue(
+      'node dashboard.cjs {PORT}',
+    )
+    await page.getByRole('button', { name: '5. Review and run', exact: true }).click()
+    await expect(page.getByRole('region', { name: 'Review and run', exact: true })).toContainText(
+      'Monthly metrics → Weekly metrics',
+    )
+    await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
+    await expect.poll(async () => (await state()).projectReplay?.saved?.scenario).toEqual(scenario)
+    expect((await state()).approval).toBeUndefined()
+    expect((await state()).projectReplay?.runs).toHaveLength(0)
+    await scenarioView(page, 'guided')
     await page.getByRole('button', { name: 'Ask agent for scenario', exact: true }).click()
     await finish()
     expect((await state()).candidates.every((candidate) => candidate.files.length === 0)).toBe(true)
     await page.getByRole('button', { name: 'Review agent proposal', exact: true }).click()
+    await expect(page.getByRole('region', { name: 'Agent proposal review' })).toContainText('60ms')
+    expect((await state()).projectReplay?.saved?.scenario.settleMs).toBe(80)
+    await page.getByRole('button', { name: 'Use proposal as draft', exact: true }).click()
+    await page.getByRole('button', { name: '4. Expected behavior', exact: true }).click()
+    await page.getByText('Checkpoint timing', { exact: true }).click()
+    await expect(page.getByLabel('UI settle time (ms)', { exact: true })).toHaveValue('60')
+    await page.getByLabel('UI settle time (ms)', { exact: true }).fill('80')
+    await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
+    await scenarioView(page, 'json')
     expect(
       JSON.parse(await page.getByRole('textbox', { name: 'Replay scenario JSON' }).inputValue())
         .settleMs,
-    ).toBe(60)
+    ).toBe(80)
     await save(scenario)
     let current = await replay('baseline')
     expect(current.projectReplay!.runs.at(-1)?.status).toBe('failed')
+    await expect
+      .poll(() => page.locator('.replay-editor').evaluate((e) => (e as HTMLDetailsElement).open))
+      .toBe(false)
     await expect(page.locator('.project-run-result')).toContainText('Product bug')
     await page.getByRole('button', { name: 'First unexpected state', exact: true }).click()
     await expect(
@@ -578,6 +699,253 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
           providerFile: provider,
           scenarioFile: join(dir, 'scenario.json'),
         },
+        null,
+        2,
+      ),
+    )
+    // Reopen completed evidence and edit a single guided field: it must become stale immediately.
+    const completedId = current.id,
+      revision = current.projectReplay!.saved!.revision
+    await page.reload()
+    await page
+      .getByRole('tablist', { name: 'Replay versions' })
+      .getByRole('tab', { name: /Candidate A/ })
+      .click()
+    await expect(page.locator('.project-run-result')).toContainText('Scenario passed')
+    await scenarioView(page, 'guided')
+    await page.getByLabel('Scenario name', { exact: true }).fill(scenario.name + ' (reviewed)')
+    await expect(page.locator('.project-run-result')).toContainText('Stale result')
+    await expect(page.getByTestId('patch-verification-status')).toContainText('stale')
+    await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
+    await expect.poll(async () => (await state()).projectReplay!.saved!.revision).toBe(revision + 1)
+    await expect(page.locator('.project-run-result')).toContainText('Stale result')
+
+    // Simulate a saved scenario from the JSON-only release, then round-trip it through both views.
+    const config = await (await fetch(runnerURL + '/api/coding/config')).json()
+    const headers = { 'Content-Type': 'application/json', 'X-Parallax-Token': config.token }
+    const createdResponse = await fetch(runnerURL + '/api/coding/sessions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        path: repo,
+        task: 'Legacy JSON scenario editor compatibility; no model.',
+        provider: 'test',
+        compare: false,
+        investigate: true,
+      }),
+    })
+    expect(createdResponse.status).toBe(201)
+    const created = (await createdResponse.json()) as CodingSession
+    const legacyState = async () =>
+      (await (
+        await fetch(runnerURL + '/api/coding/sessions/' + created.id)
+      ).json()) as CodingSession
+    await expect.poll(async () => (await legacyState()).busy, { timeout: 15000 }).toBe(false)
+    const legacy = structuredClone(scenario)
+    legacy.name = 'Existing JSON scenario'
+    legacy.app.args.push('')
+    legacy.actions[0].value = 'retained click option'
+    legacy.actions.push(
+      { id: 'clear-query', label: 'Clear query', kind: 'fill', selector: '#query', value: '' },
+      {
+        id: 'select-period',
+        label: 'Select Month in Period',
+        kind: 'select',
+        selector: '#period',
+        value: 'month',
+      },
+    )
+    legacy.requests[0] = {
+      ...legacy.requests[0],
+      method: 'POST',
+      url: '/report',
+      postData: '',
+      status: 201,
+      json: null,
+    }
+    legacy.requests[1] = {
+      ...legacy.requests[1],
+      method: 'POST',
+      url: '/report',
+      postData: '{"period":"month"}',
+      json: { rows: [' leading ', 'multi\nline', ''] },
+    }
+    legacy.requests.push({
+      id: 'flags',
+      label: 'Feature flags',
+      method: 'GET',
+      url: '/flags',
+      postData: null,
+      status: 599,
+      json: false,
+    })
+    legacy.order.push('flags')
+    legacy.expected.afterRequest = null
+    legacy.expected.texts = [' leading ', 'multi\nline', '']
+    legacy.settleMs = 0
+    const imported = await fetch(runnerURL + `/api/coding/sessions/${created.id}/replay/scenario`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ scenario: legacy, baseDigest: null }),
+    })
+    expect(imported.status).toBe(200)
+    await page.reload()
+    await page.getByRole('combobox', { name: 'Saved coding sessions' }).selectOption(created.id)
+    await scenarioView(page, 'json')
+    expect(JSON.parse(await page.getByLabel('Replay scenario JSON').inputValue())).toEqual(legacy)
+    await scenarioView(page, 'guided')
+    await page.getByLabel('Scenario name', { exact: true }).fill('Existing JSON scenario edited')
+    const legacyEdited = { ...legacy, name: 'Existing JSON scenario edited' }
+    await page.getByRole('button', { name: '2. User actions', exact: true }).click()
+    const fillRow = page.getByRole('article', { name: 'Action 3', exact: true })
+    await expect(fillRow.getByLabel('Fill value', { exact: true })).toHaveValue('')
+    await expect(fillRow.getByRole('checkbox', { name: 'Use an empty value' })).toBeChecked()
+    await fillRow.getByLabel('Fill value', { exact: true }).fill('First line\nSecond line')
+    await expect(fillRow.getByLabel('Fill value', { exact: true })).toHaveValue(
+      'First line\nSecond line',
+    )
+    await fillRow.getByRole('checkbox', { name: 'Use an empty value' }).check()
+    await expect(
+      page
+        .getByRole('article', { name: 'Action 4', exact: true })
+        .getByLabel('Option value', { exact: true }),
+    ).toHaveValue('month')
+    await page.getByRole('button', { name: '4. Expected behavior', exact: true }).click()
+    await expect(page.getByLabel('Expected text 2', { exact: true })).toHaveValue('multi\nline')
+    await page.getByRole('button', { name: '2. User actions', exact: true }).click()
+    await page.getByRole('button', { name: 'Add action', exact: true }).click()
+    const added = page.getByRole('article', { name: 'Action 5', exact: true })
+    await expect(added.getByLabel('Action name', { exact: true })).toBeFocused()
+    await added.getByLabel('Action type', { exact: true }).selectOption('fill')
+    await added.getByLabel('Fill value', { exact: true }).fill('retained typed value')
+    await added.getByLabel('Action type', { exact: true }).selectOption('select')
+    await expect(added.getByLabel('Option value', { exact: true })).toHaveValue(
+      'retained typed value',
+    )
+    await page.getByRole('button', { name: 'Remove action 5', exact: true }).click()
+    await expect(
+      page
+        .getByRole('article', { name: 'Action 4', exact: true })
+        .getByLabel('Action name', { exact: true }),
+    ).toBeFocused()
+    await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
+    await expect
+      .poll(async () => (await legacyState()).projectReplay!.saved!.scenario)
+      .toEqual(legacyEdited)
+    await scenarioView(page, 'json')
+    expect(JSON.parse(await page.getByLabel('Replay scenario JSON').inputValue())).toEqual(
+      legacyEdited,
+    )
+    await scenarioView(page, 'guided')
+    await page.getByRole('button', { name: '3. Controlled requests', exact: true }).click()
+    const exactRow = page.getByRole('article', { name: 'Controlled request 1', exact: true })
+    await exactRow.getByText('Request matching options', { exact: true }).click()
+    await expect(exactRow.getByLabel('Request body matching', { exact: true })).toHaveValue('exact')
+    await expect(exactRow.getByLabel('Exact request body', { exact: true })).toHaveValue('')
+    await page.getByRole('button', { name: 'Add controlled request', exact: true }).click()
+    const extra = page.getByRole('article', { name: 'Controlled request 4', exact: true })
+    await extra.getByLabel('Request name', { exact: true }).fill('Ambiguous flags')
+    await extra.getByLabel('Exact request URL', { exact: true }).fill('/flags')
+    await expect(extra).toContainText('Ambiguous')
+    const savedRevision = (await legacyState()).projectReplay!.saved!.revision
+    await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
+    expect((await legacyState()).projectReplay!.saved!.revision).toBe(savedRevision)
+    await page.getByRole('button', { name: 'Remove request 4', exact: true }).click()
+    const flagsRow = page.getByRole('article', { name: 'Controlled request 3', exact: true })
+    await expect(flagsRow.getByLabel('Request name', { exact: true })).toBeFocused()
+    await flagsRow.getByLabel('JSON response fixture', { exact: true }).fill('{broken')
+    await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
+    await expect(flagsRow.getByLabel('JSON response fixture', { exact: true })).toHaveValue(
+      '{broken',
+    )
+    await page.reload()
+    await scenarioView(page, 'guided')
+    await page.getByRole('button', { name: '3. Controlled requests', exact: true }).click()
+    await expect(flagsRow.getByLabel('JSON response fixture', { exact: true })).toHaveValue(
+      '{broken',
+    )
+    await flagsRow.getByLabel('JSON response fixture', { exact: true }).fill('false')
+    await scenarioView(page, 'json')
+    await page.getByLabel('Replay scenario JSON').fill('{malformed')
+    await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
+    await page.reload()
+    await expect(page.getByLabel('Replay scenario JSON')).toHaveValue('{malformed')
+    await page.getByLabel('Replay scenario JSON').fill(JSON.stringify(legacyEdited))
+    await scenarioView(page, 'guided')
+    // Optimistic revision checks protect a draft when another view saves first.
+    const beforeExternal = (await legacyState()).projectReplay!.saved!
+    const external = await fetch(runnerURL + `/api/coding/sessions/${created.id}/replay/scenario`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        scenario: { ...legacy, name: 'Saved in another view' },
+        baseDigest: beforeExternal.digest,
+      }),
+    })
+    expect(external.status).toBe(200)
+    await expect(
+      page.getByText('A newer scenario revision is saved.', { exact: true }),
+    ).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Save scenario', exact: true })).toBeDisabled()
+    const staleSave = await fetch(
+      runnerURL + `/api/coding/sessions/${created.id}/replay/scenario`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ scenario: legacyEdited, baseDigest: beforeExternal.digest }),
+      },
+    )
+    expect(staleSave.status).toBe(400)
+    await page
+      .getByRole('button', { name: 'Keep my draft against latest revision', exact: true })
+      .click()
+    await page.getByRole('button', { name: 'Save scenario', exact: true }).click()
+    await expect
+      .poll(async () => (await legacyState()).projectReplay!.saved!.scenario)
+      .toEqual(legacyEdited)
+    await scenarioView(page, 'guided')
+    await page.getByLabel('Start command', { exact: true }).fill('node missing-app.cjs {PORT}')
+    await page.getByRole('button', { name: 'Save and replay Baseline', exact: true }).click()
+    await expect(page.getByRole('region', { name: 'Command approval' })).toBeVisible()
+    await page.getByRole('button', { name: 'Open app setup', exact: true }).click()
+    await page.getByRole('button', { name: 'Review command approval', exact: true }).click()
+    await expect(page.getByRole('region', { name: 'Command approval' })).toBeFocused()
+    const startupFailed = await finish()
+    expect(startupFailed.projectReplay!.runs.at(-1)!.status).toBe('error')
+    await expect(page.getByText('App setup needs attention', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Open app setup', exact: true }).click()
+    await expect(page.getByLabel('Start command', { exact: true })).toHaveValue(
+      'node missing-app.cjs {PORT}',
+    )
+    await expect(page.getByRole('region', { name: 'App setup', exact: true })).toContainText(
+      'App exited',
+    )
+    await page.screenshot({ path: join(dir, 'guided-startup-error.png'), fullPage: true })
+    expect((await sourceSnapshot(repo)).digest).toBe(original.digest)
+    await writeFile(
+      join(dir, 'editor-proof.json'),
+      JSON.stringify(
+        {
+          guidedSession: completedId,
+          guided: true,
+          saveFailureRetained: true,
+          unsavedReload: true,
+          keyboardFocus: true,
+          legacySession: created.id,
+          legacyRoundTrip: legacyEdited,
+          validationPreserved: true,
+          conflictRejected: staleSave.status,
+          startupError: startupFailed.projectReplay!.runs.at(-1),
+          liveProviderCalls: 0,
+        },
+        null,
+        2,
+      ),
+    )
+    await writeFile(
+      resolve('artifacts/step6-latest.json'),
+      JSON.stringify(
+        { directory: dir, repo, session: completedId, legacySession: created.id },
         null,
         2,
       ),

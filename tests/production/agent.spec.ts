@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { newScenario } from '../../shared/project-replay.ts'
+import { scenarioView } from '../coding/scenario-editor-helpers.ts'
 
 test('built agent workspace executes a real investigation under its browser CSP', async ({
   page,
@@ -51,6 +52,7 @@ test('project investigation and scenario editor work under production CSP withou
   await expect(page.locator('.cut-agent-status')).toContainText('Investigation ready', {
     timeout: 20_000,
   })
+  await scenarioView(page, 'json')
   await page
     .getByRole('textbox', { name: 'Replay scenario JSON' })
     .fill(JSON.stringify(newScenario))

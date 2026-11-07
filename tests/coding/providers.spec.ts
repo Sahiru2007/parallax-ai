@@ -272,7 +272,8 @@ test('settings, credential vault, model pinning, real approved edits through bot
       { timeout: 20000 },
     )
     await page.getByRole('button', { name: 'Approve command', exact: true }).click()
-    await expect.poll(async () => (await state()).busy).toBe(false)
+    // Wait for the approved process and durable receipt, including Windows process startup.
+    await expect.poll(async () => (await state()).busy, { timeout: 20000 }).toBe(false)
     const completed = await state()
     expect(completed.status, completed.error).toBe('ready')
     expect(completed.checks.some((c) => c.status === 'passed')).toBe(true)

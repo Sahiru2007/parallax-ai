@@ -237,7 +237,13 @@ export function useCoding() {
         return null
       }
     },
-    start: (task: string, provider: 'live' | 'test', compare: boolean, investigate = false) =>
+    start: (
+      task: string,
+      provider: 'live' | 'test',
+      compare: boolean,
+      investigate = false,
+      sequential = false,
+    ) =>
       action(
         '/api/coding/sessions',
         {
@@ -247,14 +253,22 @@ export function useCoding() {
           compare,
           investigate,
           modelSelection: config?.providers?.selection,
+          sequential,
         },
         true,
       ),
-    saveScenario: (scenario: unknown) =>
-      action(`/api/coding/sessions/${session?.id}/replay/scenario`, { scenario }),
+    saveScenario: (scenario: unknown, baseDigest = session?.projectReplay?.saved?.digest ?? null) =>
+      action(`/api/coding/sessions/${session?.id}/replay/scenario`, { scenario, baseDigest }),
     replayProject: (order: string[], version: string) =>
       action(`/api/coding/sessions/${session?.id}/replay/run`, { order, version }),
-    generateFixes: () => action(`/api/coding/sessions/${session?.id}/replay/fixes`, {}),
+    generateFixes: (sequential = false) =>
+      action(`/api/coding/sessions/${session?.id}/replay/fixes`, { sequential }),
+    resume: (runId: string, additional?: number) =>
+      action(`/api/coding/sessions/${session?.id}/resume`, { runId, additional }),
+    resolveTool: (runId: string, callId: string, decision: string) =>
+      action(`/api/coding/sessions/${session?.id}/resolve-tool`, { runId, callId, decision }),
+    generateNext: (candidate: string) =>
+      action(`/api/coding/sessions/${session?.id}/generate-next`, { candidate }),
     proposeReplay: () => action(`/api/coding/sessions/${session?.id}/replay/propose`, {}),
     followup: (message: string) =>
       action(`/api/coding/sessions/${session?.id}/followup`, { message }),

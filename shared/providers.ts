@@ -30,6 +30,42 @@ export interface ProviderRun extends ModelSelection {
   rounds?: number
   toolCalls?: number
   usage?: TokenUsage
+  recovery?: RecoveryInfo
+  recoveryHistory?: RecoveryInfo[]
+  continuations?: number
+  requests?: number
+  autoRetries?: number
+  waitedMs?: number
+  resumable?: boolean
+  legacyRecovery?: boolean
+  checkpointed?: boolean
+  calls?: {
+    id: string
+    name: string
+    status: string
+    detail?: string
+    approval?: string
+    approvalHistory?: { id: string; command: string; cwd: string; decision: string }[]
+  }[]
+}
+export interface RecoveryInfo {
+  at?: string
+  kind:
+    | 'rate-limit'
+    | 'quota'
+    | 'unknown-429'
+    | 'limit'
+    | 'cancelled'
+    | 'restart'
+    | 'uncertain'
+    | 'provider'
+  message: string
+  retryAfterMs?: number
+  retryAt?: number
+  waiting?: boolean
+  attempt?: number
+  maxRetries?: number
+  maxWaitMs?: number
 }
 export interface ProviderCheck {
   ok: boolean
