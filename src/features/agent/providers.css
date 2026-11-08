@@ -1,15 +1,15 @@
 .provider-settings::backdrop {
-  background: #10120fcc;
+  background: var(--desk-paper);
 }
 .provider-settings {
   width: min(760px, 100%);
   max-height: 90vh;
   overflow: auto;
   padding: 24px;
-  background: #20241b;
-  color: #e0ddcc;
-  border: 1px solid #737b4e;
-  box-shadow: 0 16px 80px #0008;
+  background: var(--desk-paper);
+  color: var(--desk-ink);
+  border: 1px solid var(--desk-line);
+  box-shadow: none;
 }
 .provider-settings header {
   display: flex;
@@ -26,19 +26,19 @@
 .provider-settings input,
 .provider-settings select {
   font: inherit;
-  border: 1px solid #666c46;
+  border: 1px solid var(--desk-line);
   border-radius: 3px;
   padding: 9px 12px;
   color: inherit;
-  background: #2b3023;
+  background: var(--desk-paper);
 }
 .provider-settings button {
   margin: 6px 8px 6px 0;
   cursor: pointer;
 }
 .provider-settings button[aria-selected='true'] {
-  border-color: #d0b16e;
-  background: #44452b;
+  border-color: var(--desk-line);
+  background: var(--desk-paper);
 }
 .provider-settings button:disabled {
   opacity: 0.45;
@@ -61,15 +61,15 @@
   gap: 12px;
 }
 .provider-success {
-  color: #bbce91;
+  color: var(--desk-ink);
 }
 .provider-failure {
-  color: #f2b694;
+  color: var(--desk-ink);
 }
 .provider-test-label {
-  border: 1px solid #cbb072;
+  border: 1px solid var(--desk-line);
   padding: 8px;
-  color: #edd590;
+  color: var(--desk-ink);
 }
 .provider-welcome {
   display: flex;
@@ -78,14 +78,14 @@
   margin: 20px 0;
 }
 .provider-welcome button {
-  border: 1px solid #7a8053;
+  border: 1px solid var(--desk-line);
   padding: 10px 16px;
-  background: #2b3023;
-  color: #d8c28e;
+  background: var(--desk-paper);
+  color: var(--desk-ink);
   cursor: pointer;
 }
 .provider-model-label {
-  color: #d8c28e;
+  color: var(--desk-ink);
   overflow-wrap: anywhere;
 }
 @media (max-width: 650px) {

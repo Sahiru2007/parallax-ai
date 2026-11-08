@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { captureDesk } from './desk-helpers.ts'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -265,6 +266,16 @@ test('settings, credential vault, model pinning, real approved edits through bot
     await expect(
       dialog.getByRole('button', { name: 'Close provider settings', exact: true }),
     ).toBeEnabled()
+    const originalViewport = page.viewportSize()!
+    await page.setViewportSize({ width: 1280, height: 720 })
+    await expect(
+      dialog.getByRole('button', { name: 'Run coding-agent check', exact: true }),
+    ).toBeInViewport({ ratio: 1 })
+    await expect(
+      dialog.getByRole('button', { name: 'Use model for new sessions', exact: true }),
+    ).toBeInViewport({ ratio: 1 })
+    await captureDesk(page, 'provider-ready-1280', true)
+    await page.setViewportSize(originalViewport)
   }
   async function finish() {
     await expect(page.getByRole('region', { name: 'Command approval' })).toContainText(

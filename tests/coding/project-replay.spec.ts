@@ -10,7 +10,13 @@ import { command, git } from '../../runner/process.ts'
 import { sourceSnapshot } from '../../runner/coding-files.ts'
 import type { CodingSession } from '../../shared/coding.ts'
 import type { ReplayScenario } from '../../shared/project-replay.ts'
-import { scenarioView } from './scenario-editor-helpers.ts'
+import {
+  scenarioView,
+  replayTools,
+  eventDetails,
+  closeCompactDetails,
+} from './scenario-editor-helpers.ts'
+import { verifyDeskLayout } from './desk-helpers.ts'
 
 const root = process.cwd()
 async function freePort() {
@@ -293,9 +299,10 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     await expect.poll(async () => (await state()).projectReplay?.saved?.scenario).toEqual(value)
   }
   async function replay(version: 'baseline' | 'all' | 'a' = 'baseline') {
+    await closeCompactDetails(page)
     if (version !== 'all')
       await page
-        .getByRole('tab', { name: version === 'baseline' ? /Baseline/ : /Candidate A/ })
+        .getByRole('tab', { name: version === 'baseline' ? /Baseline/ : /Approach A/ })
         .first()
         .click()
     await page
@@ -305,7 +312,7 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
             ? 'Replay all'
             : version === 'baseline'
               ? 'Replay Baseline'
-              : 'Replay Candidate A',
+              : 'Replay Approach A',
         exact: true,
       })
       .click()
@@ -475,6 +482,8 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
         .getByRole('button', { name: 'Inspect ui:week', exact: true })
         .getAttribute('aria-pressed'),
     ).toBe('true')
+    await closeCompactDetails(page)
+    await page.getByTestId('project-response-week').scrollIntoViewIfNeeded()
     await page
       .getByTestId('project-response-month')
       .dragTo(page.getByTestId('project-response-week'))
@@ -483,11 +492,13 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     current = await replay('baseline')
     expect(current.projectReplay!.runs.at(-1)?.status).toBe('passed')
     // Keyboard-accessible reorder changes only delivery order, not actions or response fixtures.
+    await closeCompactDetails(page)
     await page.getByRole('button', { name: 'Move response month earlier', exact: true }).focus()
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('project-order')).toHaveText('month → week')
     current = await replay('baseline')
     expect(current.projectReplay!.runs.at(-1)?.status).toBe('failed')
+    await replayTools(page)
     await page.getByRole('button', { name: 'Generate two fixes', exact: true }).click()
     current = await finish()
     expect(current.candidates).toHaveLength(2)
@@ -504,7 +515,7 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     ])
     await expect(page.getByLabel('Comparison conclusion')).toContainText('Tie')
     await page
-      .getByRole('tab', { name: /Candidate A/ })
+      .getByRole('tab', { name: /Approach A/ })
       .first()
       .click()
     await page.getByRole('button', { name: 'Inspect ui:week', exact: true }).click()
@@ -513,7 +524,7 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
       page.getByRole('complementary', { name: 'Replay checkpoint inspector' }),
     ).toContainText('Monthly revenue $45,000')
     await page
-      .getByRole('tab', { name: /Candidate B/ })
+      .getByRole('tab', { name: /Approach B/ })
       .first()
       .click()
     expect(
@@ -527,6 +538,7 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     const before = await playhead.inputValue()
     await page.keyboard.press('ArrowLeft')
     expect(await playhead.inputValue()).not.toBe(before)
+    await closeCompactDetails(page)
     await page.getByRole('button', { name: 'Move response month later', exact: true }).click()
     current = await replay('all')
     expect(current.projectReplay!.runs.slice(-3).map((r) => [r.version, r.status])).toEqual([
@@ -541,10 +553,11 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
         run.events.filter((e) => e.track === 'action' && e.key !== 'navigate').map((e) => e.label),
       ).toEqual(scenario.actions.map((a) => a.label))
     }
+    await closeCompactDetails(page)
     await page.getByRole('button', { name: 'Move response month earlier', exact: true }).click()
     await replay('all')
     await page
-      .getByRole('tab', { name: /Candidate A/ })
+      .getByRole('tab', { name: /Approach A/ })
       .first()
       .click()
     const candidatePath = (await state()).candidates[0].worktree,
@@ -560,9 +573,10 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     await expect(page.getByTestId('project-order')).toHaveText('month → week')
     current = await state()
     await page
-      .getByRole('tab', { name: /Candidate A/ })
+      .getByRole('tab', { name: /Approach A/ })
       .first()
       .click()
+    await eventDetails(page)
     await page.locator('.project-relevant-diff summary').click()
     await expect(page.locator('.project-relevant-diff pre')).toContainText(
       live ? 'fetch' : 'generation',
@@ -573,6 +587,7 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     await (await patchDownload).saveAs(patchPath)
     await git(current.projectReplay!.baselineWorktree!, ['apply', '--check', patchPath])
     const exported = page.waitForEvent('download')
+    await replayTools(page)
     await page.getByRole('link', { name: 'Export regression test', exact: true }).click()
     const exportedDir = join(dir, 'standalone')
     await mkdir(exportedDir, { recursive: true })
@@ -614,6 +629,7 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
       }
     }
     await page.screenshot({ path: join(dir, 'comparison-tie.png'), fullPage: true })
+    await verifyDeskLayout(page, 'comparison')
     // Coverage changes must not be presented as equivalent fixes.
     await writeFile(join(candidatePath, 'dashboard.js'), aborting)
     await page.getByRole('button', { name: 'Refresh evidence', exact: true }).click()
@@ -709,7 +725,7 @@ document.querySelectorAll('[data-period]').forEach(button => button.addEventList
     await page.reload()
     await page
       .getByRole('tablist', { name: 'Replay versions' })
-      .getByRole('tab', { name: /Candidate A/ })
+      .getByRole('tab', { name: /Approach A/ })
       .click()
     await expect(page.locator('.project-run-result')).toContainText('Scenario passed')
     await scenarioView(page, 'guided')

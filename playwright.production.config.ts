@@ -12,7 +12,11 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    env: { PARALLAX_STATE_DIR: 'artifacts/production-coding-state' },
+    env: {
+      PARALLAX_STATE_DIR: 'artifacts/production-coding-state',
+      PARALLAX_RUNNER_PORT: '4318',
+      PARALLAX_RUNNER_URL: 'http://127.0.0.1:4318',
+    },
     command: 'npm run preview -- --host 127.0.0.1 --port 1421 --strictPort',
     url: 'http://127.0.0.1:1421',
     reuseExistingServer: !process.env.CI,

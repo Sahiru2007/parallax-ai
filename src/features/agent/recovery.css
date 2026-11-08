@@ -1,9 +1,9 @@
 .candidate-recovery {
   margin: 0 0 18px;
   padding: 16px;
-  border: 1px solid #626744;
-  background: #24291e;
-  color: #ded8c4;
+  border: 1px solid var(--desk-line);
+  background: var(--desk-paper);
+  color: var(--desk-ink);
 }
 .candidate-recovery p {
   margin: 8px 0;
@@ -16,7 +16,7 @@
   gap: 18px;
 }
 .recovery-statuses strong {
-  color: #ddbe81;
+  color: var(--desk-ink);
 }
 .recovery-actions {
   display: flex;
@@ -33,12 +33,12 @@
 .recovery-actions input[type='number'] {
   width: 75px;
   color: inherit;
-  background: #191b18;
-  border: 1px solid #747951;
+  background: var(--desk-paper);
+  border: 1px solid var(--desk-line);
   padding: 7px;
 }
 .recovery-receipt {
-  border-top: 1px solid #51583b;
+  border-top: 1px solid var(--desk-line);
   padding: 12px 0;
 }
 .recovery-receipt pre {

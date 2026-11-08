@@ -22,10 +22,17 @@ export function ProviderSettingsPanel({
   const keyInput = useRef<HTMLInputElement>(null)
   const roundInput = useRef<HTMLInputElement>(null)
   const dialog = useRef<HTMLDialogElement>(null)
+  const returnFocus = useRef(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  )
   useEffect(() => {
     const node = dialog.current
+    const opener = returnFocus.current
     node?.showModal()
-    return () => node?.close()
+    return () => {
+      node?.close()
+      if (opener?.isConnected) opener.focus()
+    }
   }, [])
   const current = settings?.[provider]
   const cloud = provider === 'ollama' ? undefined : settings?.[provider]
@@ -62,10 +69,6 @@ export function ProviderSettingsPanel({
           Close provider settings
         </button>
       </header>
-      <p>
-        Connection tests list models. The coding-agent check exercises a harmless tool call and
-        result. A real coding task still needs project verification.
-      </p>
       {settings?.testTransport && (
         <p className="provider-test-label">PROTOCOL TEST DOUBLE — NO LIVE MODEL</p>
       )}
@@ -87,57 +90,44 @@ export function ProviderSettingsPanel({
           </button>
         ))}
       </div>
-      {provider !== 'ollama' ? (
-        <>
-          <p>
-            Key: {cloud?.keySource ?? 'none'}. Saved keys use Windows Credential Manager. Keys are
-            never returned to the app.
-          </p>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              const key = keyInput.current?.value ?? ''
-              if (keyInput.current) keyInput.current.value = ''
-              void act('save-key', { key })
-            }}
-          >
-            <label>
-              {provider === 'gemini' ? 'Gemini' : 'OpenAI'} API key
-              <input
-                ref={keyInput}
-                aria-label={`${provider === 'gemini' ? 'Gemini' : 'OpenAI'} API key`}
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="Enter or replace API key"
-                disabled={Boolean(pending) || !cloud?.credentialStore}
-              />
-            </label>
-            <button disabled={Boolean(pending) || !cloud?.credentialStore}>Save API key</button>
-          </form>
-          {!cloud?.credentialStore && (
-            <p>
-              OS credential storage is unavailable on this platform. Runner environment variables
-              remain supported for development.
+      <section className="provider-credentials" aria-label="Provider credentials">
+        {provider !== 'ollama' ? (
+          <>
+            <p className="provider-key-status">
+              Key: {cloud?.keySource ?? 'none'} · Windows Credential Manager
             </p>
-          )}
-          <button disabled={Boolean(pending)} onClick={() => void act('remove-key')}>
-            Remove API key
-          </button>
-          <button disabled={Boolean(pending)} onClick={() => void act('use-environment')}>
-            Use development environment key
-          </button>
-          <p>Removing a key also disables environment fallback. Re-enable it explicitly above.</p>
-          {provider === 'gemini' && (
-            <p>
-              Test connection loads the generation models available to this key. Available
-              Flash-Lite models appear first for lighter use. The exact model ID is shown below;
-              listing models does not start a coding task or verify tool support.
-            </p>
-          )}
-        </>
-      ) : (
-        <>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                const key = keyInput.current?.value ?? ''
+                if (keyInput.current) keyInput.current.value = ''
+                void act('save-key', { key })
+              }}
+            >
+              <label>
+                {provider === 'gemini' ? 'Gemini' : 'OpenAI'} API key
+                <input
+                  ref={keyInput}
+                  aria-label={`${provider === 'gemini' ? 'Gemini' : 'OpenAI'} API key`}
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Enter or replace API key"
+                  disabled={Boolean(pending) || !cloud?.credentialStore}
+                />
+              </label>
+              <button disabled={Boolean(pending) || !cloud?.credentialStore}>Save API key</button>
+            </form>
+            <div className="provider-key-actions">
+              <button disabled={Boolean(pending)} onClick={() => void act('remove-key')}>
+                Remove API key
+              </button>
+              {!cloud?.credentialStore && (
+                <span>OS storage unavailable. See development controls.</span>
+              )}
+            </div>
+          </>
+        ) : (
           <form
             onSubmit={(e) => {
               e.preventDefault()
@@ -155,101 +145,76 @@ export function ProviderSettingsPanel({
             </label>
             <button disabled={Boolean(pending)}>Save Ollama server</button>
           </form>
-          <p>
-            Local loopback HTTP only. Start Ollama and install a local tool-capable model. No
-            automatic cloud fallback.
+        )}
+        <div className="provider-connection-row">
+          <button disabled={Boolean(pending)} onClick={() => void act('connection')}>
+            Test connection
+          </button>
+          <span>List models; no coding task.</span>
+        </div>
+        {current?.connection && (
+          <p
+            role="status"
+            className={current.connection.ok ? 'provider-success' : 'provider-failure'}
+          >
+            {current.connection.message}
           </p>
-        </>
-      )}
-      <button disabled={Boolean(pending)} onClick={() => void act('connection')}>
-        Test connection
-      </button>
-      {current?.connection && (
-        <p
-          role="status"
-          className={current.connection.ok ? 'provider-success' : 'provider-failure'}
-        >
-          {current.connection.message}
-        </p>
-      )}
-      <label>
-        Available model
-        <select
-          aria-label="Available model"
-          value={chosen}
-          disabled={Boolean(pending) || !current?.models.length}
-          onChange={(e) => setModel(e.target.value)}
-        >
-          {!current?.models.length && <option value="">Test connection to list models…</option>}
-          {current?.models.map((id) => (
-            <option key={id} value={id}>
-              {providerName(provider)} · {id}
-            </option>
-          ))}
-        </select>
-      </label>
-      {chosen && (
-        <p>
-          Exact model ID: <code>{chosen}</code>
-        </p>
-      )}
-      <button
-        disabled={Boolean(pending) || !chosen}
-        onClick={() => void act('agent-check', { model: chosen })}
-      >
-        Run coding-agent check
-      </button>
-      {current?.checks[chosen] && (
-        <p
-          role="status"
-          className={current.checks[chosen].ok ? 'provider-success' : 'provider-failure'}
-        >
-          {current.checks[chosen].message}
-        </p>
-      )}
-      <button
-        disabled={Boolean(pending) || !chosen || !current?.checks[chosen]?.ok}
-        onClick={() => void act('select', { model: chosen })}
-      >
-        Use model for new sessions
-      </button>
-      <p>
-        Default:{' '}
-        {settings?.selection
-          ? `${providerName(settings.selection.provider)} · ${settings.selection.model}`
-          : 'No model selected'}
-        . Existing sessions keep their original provider and model.
-      </p>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          void act('round-limit', { limit: Number(roundInput.current?.value) })
-        }}
-      >
+        )}
+      </section>
+      <section className="provider-models" aria-label="Model and tool check">
         <label>
-          Agent round limit
-          <input
-            key={settings?.maxToolRounds}
-            ref={roundInput}
-            aria-label="Agent round limit"
-            type="number"
-            min={2}
-            max={24}
-            step={1}
-            defaultValue={settings?.maxToolRounds ?? 12}
-            disabled={Boolean(pending)}
-          />
+          Available model
+          <select
+            aria-label="Available model"
+            value={chosen}
+            disabled={Boolean(pending) || !current?.models.length}
+            onChange={(e) => setModel(e.target.value)}
+          >
+            {!current?.models.length && <option value="">Test connection to list models…</option>}
+            {current?.models.map((id) => (
+              <option key={id} value={id}>
+                {providerName(provider)} · {id}
+              </option>
+            ))}
+          </select>
         </label>
-        <button disabled={Boolean(pending)}>Save round limit</button>
-      </form>
-      <p>
-        Limit: {settings?.maxToolRounds ?? 12} model-response rounds per candidate and instruction.
-        A round may request multiple tools. New sessions use this limit; active sessions retain
-        theirs. Reaching the limit stops the agent and retains partial evidence. Token usage is
-        reported when provided by the API; this is not a spending limit.
-      </p>
+        {chosen && (
+          <p className="provider-exact-model">
+            Exact model ID: <code>{chosen}</code>
+          </p>
+        )}
+        <div className="provider-check-actions">
+          <button
+            disabled={Boolean(pending) || !chosen}
+            onClick={() => void act('agent-check', { model: chosen })}
+          >
+            Run coding-agent check
+          </button>
+          <button
+            className="cut-primary"
+            disabled={Boolean(pending) || !chosen || !current?.checks[chosen]?.ok}
+            onClick={() => void act('select', { model: chosen })}
+          >
+            Use model for new sessions
+          </button>
+        </div>
+        {current?.checks[chosen] && (
+          <p
+            role="status"
+            className={current.checks[chosen].ok ? 'provider-success' : 'provider-failure'}
+          >
+            {current.checks[chosen].message}
+          </p>
+        )}
+        <p className="provider-current-default">
+          Default:{' '}
+          {settings?.selection
+            ? `${providerName(settings.selection.provider)} · ${settings.selection.model}`
+            : 'No model selected'}
+        </p>
+      </section>
       {pending && (
-        <p role="status">
+        <p role="status" className="provider-pending">
           {pending === 'agent-check'
             ? 'Checking tool-call round trip… this can take up to 90 seconds.'
             : 'Updating provider settings…'}
@@ -260,6 +225,70 @@ export function ProviderSettingsPanel({
           {error}
         </p>
       )}
+      <details className="provider-advanced">
+        <summary>Development controls & agent limits</summary>
+        {provider !== 'ollama' && (
+          <>
+            <button disabled={Boolean(pending)} onClick={() => void act('use-environment')}>
+              Use development environment key
+            </button>
+            <p>
+              Removing a key also disables environment fallback. Re-enable it explicitly above. On
+              platforms without OS credential storage, use runner environment variables for
+              development.
+            </p>
+          </>
+        )}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            void act('round-limit', { limit: Number(roundInput.current?.value) })
+          }}
+        >
+          <label>
+            Agent round limit
+            <input
+              key={settings?.maxToolRounds}
+              ref={roundInput}
+              aria-label="Agent round limit"
+              type="number"
+              min={2}
+              max={24}
+              step={1}
+              defaultValue={settings?.maxToolRounds ?? 12}
+              disabled={Boolean(pending)}
+            />
+          </label>
+          <button disabled={Boolean(pending)}>Save round limit</button>
+        </form>
+        <p>
+          Limit: {settings?.maxToolRounds ?? 12} model-response rounds per candidate and
+          instruction. A round may request multiple tools. New sessions use this limit; active
+          sessions retain theirs. Reaching the limit retains partial evidence. Token usage is
+          reported when provided; this is not a spending limit.
+        </p>
+      </details>
+      <details className="provider-guidance">
+        <summary>Connection, tool checks & credential guidance</summary>
+        <p>
+          Connection tests list models. The coding-agent check exercises a harmless tool call and
+          result. A real coding task still needs project verification. Existing sessions keep their
+          original provider and model.
+        </p>
+        <p>Saved keys use Windows Credential Manager and are never returned to the app.</p>
+        {provider === 'gemini' && (
+          <p>
+            Available Flash-Lite models appear first for lighter use. The exact model ID is shown
+            above. Listing models does not verify tool support.
+          </p>
+        )}
+        {provider === 'ollama' && (
+          <p>
+            Local loopback HTTP only. Start Ollama and install a local tool-capable model. No
+            automatic cloud fallback.
+          </p>
+        )}
+      </details>
     </dialog>
   )
 }

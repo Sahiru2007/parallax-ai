@@ -1,0 +1,110 @@
+/* The bundled example shares the working desk palette and retains its dark timeline. */
+.studio {
+  --cut-bg: var(--desk-paper);
+  --cut-surface: var(--desk-white);
+  --cut-raised: var(--desk-wash);
+  --cut-line: var(--desk-line);
+  --cut-muted: var(--desk-muted);
+  --cut-text: var(--desk-ink);
+  --cut-amber: var(--desk-accent);
+  color-scheme: dark;
+}
+.studio .cut-brand strong {
+  color: var(--desk-ink);
+}
+.studio .cut-brand strong span {
+  color: var(--desk-muted);
+}
+.studio .cut-primary {
+  background: var(--desk-accent);
+  border-color: var(--desk-accent);
+  color: var(--citron-ink);
+  border-radius: 2px;
+}
+.studio .cut-composer {
+  background: var(--desk-white);
+  border-radius: 2px;
+  border-color: var(--desk-line);
+  box-shadow: none;
+}
+.studio .cut-composer textarea {
+  color: var(--desk-ink);
+}
+.studio .cut-composer :is(textarea::placeholder, select, option) {
+  color: var(--desk-muted);
+}
+.studio .cut-composer option {
+  background: var(--desk-white);
+}
+.studio .cut-composer-actions {
+  background: var(--desk-paper);
+}
+.studio .cut-use-sample {
+  background: transparent !important;
+  color: var(--desk-ink) !important;
+  border-color: var(--desk-line) !important;
+}
+.studio .cut-welcome h1 {
+  letter-spacing: -0.05em;
+}
+.studio .cut-welcome-coordinate,
+.studio .cut-welcome p {
+  color: var(--desk-muted);
+}
+.studio .cut-welcome h1 span {
+  color: var(--desk-accent);
+}
+.studio .cut-timeline {
+  background: var(--desk-night);
+  border-color: #505b52;
+  color: #d4d6d4;
+  border-radius: 0;
+}
+.studio .cut-timeline button {
+  color: #d4d6d4;
+}
+.studio .cut-timeline :is(.cut-eyebrow, .cut-timeline-subtitle) {
+  color: #a2a7a4;
+}
+.studio .cut-timeline .cut-playhead {
+  border-color: #d1df78;
+}
+.studio .cut-timeline .cut-playhead::before {
+  background: #d1df78;
+}
+.studio .cut-timeline .cut-clip.selected {
+  outline-color: #d1df78;
+}
+.studio :is(button, a, summary, input, select, textarea):focus-visible {
+  outline: 2px solid var(--desk-accent);
+  outline-offset: 3px;
+}
+.studio .cut-result.passed {
+  color: var(--desk-good);
+}
+.studio .cut-result.failed {
+  color: var(--desk-bad);
+}
+.studio .cut-result.error,
+.studio .cut-stale {
+  color: var(--desk-warn);
+}
+.studio .cut-diff-code .cut-added {
+  color: var(--desk-good);
+}
+.studio .cut-diff-code .cut-removed {
+  color: var(--desk-bad);
+}
+.studio .cut-diff-dialog {
+  color-scheme: dark;
+}
+.studio .cut-diff-dialog::backdrop,
+.studio .cut-config-dialog::backdrop {
+  background: #0a0c0dcc;
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

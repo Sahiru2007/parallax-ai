@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { captureDesk, verifyDeskLayout } from './desk-helpers.ts'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
@@ -212,10 +213,22 @@ test('ordinary repo feature, follow-up, approved commands, transactional apply, 
   }
   async function finish(verifyStale = false) {
     let approvals = 0
+    let draftProbe: number | undefined
     for (let i = 0; i < 600; i++) {
       const value = await state()
       if (!value.busy) {
         expect(value.status, value.error).toBe('ready')
+        if (draftProbe !== undefined) {
+          const draft = page.getByRole('textbox', { name: 'Follow-up instruction' })
+          await expect(draft).toHaveValue('Draft entered while the agent awaits approval.')
+          expect(
+            await draft.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd]),
+          ).toEqual([2, 9])
+          expect(
+            await page.getByLabel('Conversation and tool activity').evaluate((el) => el.scrollTop),
+          ).toBe(draftProbe)
+          await draft.fill('')
+        }
         return value
       }
       if (value.approval) {
@@ -227,7 +240,42 @@ test('ordinary repo feature, follow-up, approved commands, transactional apply, 
         )
         if (verifyStale && approvals === 0)
           await expect(page.getByTestId('coding-check').filter({ hasText: 'STALE' })).toHaveCount(2)
-        await page.getByRole('button', { name: 'Approve command', exact: true }).click()
+        if (approvals === 0 && !verifyStale) {
+          await captureDesk(page, 'active-coding-approval', true)
+          const originalViewport = page.viewportSize()!
+          for (const size of [
+            { width: 1280, height: 720 },
+            { width: 1920, height: 1080 },
+          ]) {
+            await page.setViewportSize(size)
+            await page.evaluate(() => window.scrollTo(0, 0))
+            await expect(
+              page.getByRole('button', { name: 'Approve command', exact: true }),
+            ).toBeInViewport({ ratio: 1 })
+            await expect(
+              page.getByRole('button', { name: 'Continue session', exact: true }),
+            ).toBeInViewport({ ratio: 1 })
+            await captureDesk(page, `active-coding-${size.width}`, true)
+          }
+          await page.setViewportSize(originalViewport)
+          const draft = page.getByRole('textbox', { name: 'Follow-up instruction' })
+          await draft.fill('Draft entered while the agent awaits approval.')
+          await draft.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(2, 9))
+          await page.waitForTimeout(250)
+          expect(
+            await draft.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd]),
+          ).toEqual([2, 9])
+          draftProbe = await page
+            .getByLabel('Conversation and tool activity')
+            .evaluate((el) => el.scrollTop)
+        }
+        if (approvals === 0 && !verifyStale) {
+          const size = page.viewportSize()!
+          await page.setViewportSize({ width: 1280, height: 720 })
+          await page.getByRole('button', { name: 'Approve command', exact: true }).focus()
+          await page.keyboard.press('Enter')
+          await page.setViewportSize(size)
+        } else await page.getByRole('button', { name: 'Approve command', exact: true }).click()
         approvals++
       }
       await page.waitForTimeout(100)
@@ -245,8 +293,7 @@ test('ordinary repo feature, follow-up, approved commands, transactional apply, 
     await expect(page.locator('.coding-baseline')).toContainText(original.revision)
     await expect(page.locator('.coding-baseline')).toContainText('Clean checkout')
     await expect(page.getByRole('checkbox', { name: 'Compare approaches' })).not.toBeChecked()
-    const cfg = await (await fetch(runnerUrl + '/api/coding/config')).json()
-    const live = cfg.live.configured === true
+    const live = false // Routine acceptance always uses the controlled provider.
     await page
       .getByRole('combobox', { name: 'Coding provider' })
       .selectOption(live ? 'live' : 'test')
@@ -258,6 +305,9 @@ test('ordinary repo feature, follow-up, approved commands, transactional apply, 
     await page.getByRole('button', { name: 'Start coding', exact: true }).click()
     await expect(page.getByRole('textbox', { name: 'Follow-up instruction' })).toBeVisible()
     const firstState = await finish()
+    await expect(
+      page.locator('.desk-session-list [aria-current="page"] .desk-session-state'),
+    ).toContainText('ready')
     expect(firstState.candidates).toHaveLength(1)
     expect(
       firstState.events.some(
@@ -278,8 +328,36 @@ test('ordinary repo feature, follow-up, approved commands, transactional apply, 
       .fill(
         'Change the requirement: BigInt must be rejected by default and accepted only with the second argument { allowBigInt: true }, including negative BigInts. Continue from the existing implementation, keep all original tests and Node runner migration, update bigint.test.cjs and README, and rerun build and tests.',
       )
+    let releaseFollowup!: () => void
+    const pendingFollowup = new Promise<void>((resolve) => {
+      releaseFollowup = resolve
+    })
+    await page.route('**/api/coding/sessions/*/followup', async (route) => {
+      await pendingFollowup
+      await route.continue()
+    })
+    const followupRequest = page.waitForRequest('**/api/coding/sessions/*/followup')
     await page.getByRole('button', { name: 'Continue session', exact: true }).click()
+    await followupRequest
+    await page
+      .getByRole('textbox', { name: 'Follow-up instruction' })
+      .fill('A newer draft typed while submission is pending.')
+    releaseFollowup()
     const completed = await finish(!live)
+    await expect(page.getByRole('textbox', { name: 'Follow-up instruction' })).toHaveValue(
+      'A newer draft typed while submission is pending.',
+    )
+    await page.getByRole('textbox', { name: 'Follow-up instruction' }).fill('')
+    await page.unroute('**/api/coding/sessions/*/followup')
+    await page.getByRole('tab', { name: /Check output/ }).click()
+    await expect(page.getByLabel('Project command output')).toContainText('PASSED')
+    await captureDesk(page, 'coding-adjacent-command-output', true)
+    await page.getByRole('tab', { name: 'Files & checks', exact: true }).click()
+    await verifyDeskLayout(page, 'coding')
+    await page.getByRole('tab', { name: /Command output/ }).click()
+    await expect(page.getByLabel('Agent command output')).toContainText('PASSED')
+    await captureDesk(page, 'coding-command-output', true)
+    await page.getByRole('tab', { name: 'Activity', exact: true }).click()
     expect(completed.id).toBe(firstState.id)
     expect(completed.turn).toBe(2)
     expect(completed.candidates[0].worktree).toBe(candidatePath)

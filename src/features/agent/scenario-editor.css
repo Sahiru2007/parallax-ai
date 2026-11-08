@@ -23,15 +23,15 @@
   align-items: center;
 }
 .scenario-view-switch {
-  border-bottom: 1px solid #484d39;
+  border-bottom: 1px solid var(--desk-line);
   padding-bottom: 12px;
   margin-bottom: 12px;
 }
 .scenario-view-switch [aria-selected='true'],
 .scenario-step-nav [aria-current='step'] {
-  border-color: #d8b779;
-  color: #f3d59d;
-  background: #383b29;
+  border-color: var(--desk-line);
+  color: var(--desk-ink);
+  background: var(--desk-paper);
 }
 .scenario-step-nav {
   margin-bottom: 18px;
@@ -43,14 +43,14 @@
 }
 .scenario-guided h3 {
   font-size: 16px;
-  color: #ead4a6;
+  color: var(--desk-ink);
   margin: 16px 0 8px;
 }
 .scenario-guided h4 {
   margin: 14px 0 8px;
 }
 .scenario-guided :focus-visible {
-  outline: 2px solid #e8c888;
+  outline: 2px solid var(--desk-accent);
   outline-offset: 3px;
 }
 .scenario-grid {
@@ -66,8 +66,8 @@
   min-width: 0;
 }
 .scenario-field > label {
-  color: #d5d8bf;
-  font-weight: 550;
+  color: var(--desk-ink);
+  font-weight: 500;
   font-size: 12px;
 }
 .coding-workspace .scenario-guided input:not([type='checkbox']),
@@ -75,10 +75,10 @@
 .coding-workspace .scenario-guided textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid #565d43;
+  border: 1px solid var(--desk-line);
   border-radius: 4px;
-  background: #151912;
-  color: #e8e8d4;
+  background: var(--desk-paper);
+  color: var(--desk-ink);
   padding: 10px;
   font: inherit;
   box-sizing: border-box;
@@ -87,9 +87,7 @@
   height: 125px;
   resize: vertical;
   margin: 0;
-  font:
-    12px/1.6 'JetBrains Mono',
-    monospace;
+  font: 12px/1.6 var(--font-technical);
 }
 .coding-workspace .scenario-json textarea {
   height: 380px;
@@ -98,20 +96,20 @@
   height: 68px;
 }
 .scenario-field small {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
-  color: #b2b99c;
+  color: var(--desk-ink);
   overflow-wrap: anywhere;
 }
 .scenario-guided .scenario-error {
-  color: #f1b5a5;
+  color: var(--desk-ink);
 }
 .coding-workspace .scenario-guided [aria-invalid='true'] {
-  border-color: #d18c76;
+  border-color: var(--desk-line);
 }
 .scenario-row {
-  border: 1px solid #4a533b;
-  background: #1b2017;
+  border: 1px solid var(--desk-line);
+  background: var(--desk-paper);
   padding: 13px;
   margin: 12px 0;
   border-radius: 5px;
@@ -122,7 +120,7 @@
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  color: #d9c492;
+  color: var(--desk-ink);
   font-size: 12px;
 }
 .scenario-row-heading > div {
@@ -130,7 +128,7 @@
   gap: 5px;
 }
 .scenario-guided details {
-  border-top: 1px solid #3d4530;
+  border-top: 1px solid var(--desk-line);
   margin-top: 12px;
   padding-top: 10px;
 }
@@ -141,7 +139,7 @@
 .scenario-guided pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 11px;
+  font-size: 12px;
 }
 .scenario-guided pre {
   max-height: 240px;
@@ -174,26 +172,26 @@
   overflow-wrap: anywhere;
 }
 .scenario-step-footer {
-  border-top: 1px solid #454d35;
+  border-top: 1px solid var(--desk-line);
   padding-top: 15px;
   margin-top: 20px;
 }
 .scenario-step-footer span {
   margin-left: auto;
-  color: #b1b89c;
-  font-size: 11px;
+  color: var(--desk-ink);
+  font-size: 12px;
 }
 .scenario-save {
   margin-top: 18px;
 }
 .scenario-save span {
   width: 100%;
-  color: #b1b89c;
-  font-size: 11px;
+  color: var(--desk-ink);
+  font-size: 12px;
 }
 .scenario-notice {
-  border-left: 3px solid #cba66b;
-  background: #303422;
+  border-left: 3px solid var(--desk-line);
+  background: var(--desk-paper);
   padding: 12px;
   margin: 12px 0;
   font-size: 12px;
@@ -205,7 +203,7 @@
 }
 .scenario-suggestions > div {
   padding: 12px 0;
-  border-bottom: 1px solid #414a34;
+  border-bottom: 1px solid var(--desk-line);
 }
 .scenario-suggestions button {
   display: block;
@@ -219,8 +217,8 @@
   line-height: 1.7;
 }
 .scenario-review dt {
-  color: #dbc48b;
-  font-weight: 600;
+  color: var(--desk-ink);
+  font-weight: 500;
 }
 .scenario-review dd {
   margin: 0;
@@ -236,7 +234,7 @@
   margin-bottom: 6px;
 }
 .scenario-empty {
-  border: 1px dashed #566144;
+  border: 1px dashed var(--desk-line);
   padding: 16px;
 }
 @media (max-width: 750px) {

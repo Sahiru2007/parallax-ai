@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { command } from '../../runner/process.ts'
 import { sourceSnapshot } from '../../runner/coding-files.ts'
 import { WindowsCredentialStore } from '../../runner/credentials.ts'
-import { scenarioView } from './scenario-editor-helpers.ts'
+import { scenarioView, replayTools } from './scenario-editor-helpers.ts'
 import type { CodingConfig, CodingSession } from '../../shared/coding.ts'
 import {
   createGeminiAcceptanceRepo,
@@ -228,6 +228,7 @@ async function acceptance(page: Page, base: string, runnerURL: string, dir: stri
     )
     await page.waitForTimeout(65000)
   }
+  await replayTools(page)
   await page.getByRole('button', { name: 'Generate two fixes', exact: true }).click()
   const fixes = await finish()
   expect(fixes.candidates).toHaveLength(2)

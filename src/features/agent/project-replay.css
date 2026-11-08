@@ -14,28 +14,26 @@
   font-size: 22px;
 }
 .replay-editor {
-  border: 1px solid #484d39;
-  background: #20241d;
+  border: 1px solid var(--desk-line);
+  background: var(--desk-paper);
   padding: 12px;
   margin-bottom: 16px;
 }
 .replay-editor summary {
   cursor: pointer;
-  color: #e0bf7e;
+  color: var(--desk-ink);
 }
 .replay-editor p {
-  color: #a5ab91;
+  color: var(--desk-ink);
   font-size: 12px;
   line-height: 1.6;
   margin: 10px 0;
 }
 .coding-workspace .replay-editor textarea {
   height: 260px;
-  background: #151912;
-  font:
-    11px/1.6 'JetBrains Mono',
-    monospace;
-  border: 1px solid #454b35;
+  background: var(--desk-paper);
+  font: 11px/1.6 var(--font-technical);
+  border: 1px solid var(--desk-line);
   margin: 10px 0;
 }
 .replay-editor > div {
@@ -58,23 +56,21 @@
   min-height: 52px;
 }
 .project-version-tabs [aria-selected='true'] {
-  border-color: #dfba72;
-  background: #373827;
+  border-color: var(--desk-line);
+  background: var(--desk-paper);
 }
 .replay-outcome {
-  font:
-    10px 'JetBrains Mono',
-    monospace;
-  color: #a3ae82;
+  font: 10px var(--font-technical);
+  color: var(--desk-ink);
 }
 .replay-outcome.failed {
-  color: #e6a68a;
+  color: var(--desk-ink);
 }
 .replay-outcome.error {
-  color: #e8bf6e;
+  color: var(--desk-ink);
 }
 .replay-outcome.stale {
-  color: #c8bd96;
+  color: var(--desk-ink);
 }
 .project-replay-controls {
   display: flex;
@@ -92,24 +88,24 @@
   font-size: 12px;
 }
 .project-replay-controls [data-testid='project-order'] {
-  color: #ebc77c;
-  font-family: 'JetBrains Mono', monospace;
+  color: var(--desk-ink);
+  font-family: var(--font-technical);
 }
 .replay-feedback {
   padding: 10px;
-  border-left: 3px solid #dab977;
-  color: #e4c58e;
+  border-left: 3px solid var(--desk-line);
+  color: var(--desk-ink);
   font-size: 12px;
-  background: #353324;
+  background: var(--desk-paper);
 }
 .replay-comparison {
-  color: #c1c69d;
+  color: var(--desk-ink);
   padding: 10px 0;
   font-size: 13px;
 }
 .project-browser {
-  background: #12160f;
-  border: 1px solid #484e38;
+  background: var(--desk-paper);
+  border: 1px solid var(--desk-line);
   border-radius: 5px;
   overflow: hidden;
 }
@@ -118,16 +114,16 @@
   justify-content: space-between;
   gap: 12px;
   padding: 9px 12px;
-  background: #2a2f23;
-  color: #adb58e;
-  font-size: 11px;
+  background: var(--desk-paper);
+  color: var(--desk-ink);
+  font-size: 12px;
 }
 .project-browser-frame {
   height: 290px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: repeating-linear-gradient(135deg, #161a13, #161a13 6px, #181c15 6px, #181c15 7px);
+  background: var(--desk-paper);
 }
 .project-browser-frame img {
   height: 100%;
@@ -135,18 +131,18 @@
   object-fit: contain;
 }
 .project-browser-frame p {
-  color: #a3ab8c;
+  color: var(--desk-ink);
 }
 .project-replay-workbench {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 220px;
-  border: 1px solid #495039;
+  border: 1px solid var(--desk-line);
   margin-top: 14px;
   min-height: 315px;
 }
 .project-timeline {
   min-width: 0;
-  background: #22271e;
+  background: var(--desk-paper);
 }
 .project-timeline-heading {
   display: flex;
@@ -154,7 +150,7 @@
   align-items: center;
   flex-wrap: wrap;
   padding: 12px;
-  border-bottom: 1px solid #495039;
+  border-bottom: 1px solid var(--desk-line);
 }
 .project-timeline-heading h3 {
   font-size: 13px;
@@ -162,28 +158,28 @@
   letter-spacing: 0.08em;
 }
 .project-timeline-heading span {
-  font-size: 10px;
-  color: #969f7c;
+  font-size: 12px;
+  color: var(--desk-ink);
 }
 .project-timeline-heading button {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 12px;
 }
 .project-scrubber {
   padding: 10px 12px;
-  color: #dfbe7e;
-  font-size: 11px;
+  color: var(--desk-ink);
+  font-size: 12px;
 }
 .project-scrubber input {
   flex: 1;
-  accent-color: #e1bb70;
+  accent-color: var(--desk-accent);
   cursor: ew-resize;
 }
 .project-track {
   display: grid;
   grid-template-columns: 110px minmax(0, 1fr);
   min-height: 76px;
-  border-top: 1px solid #434a34;
+  border-top: 1px solid var(--desk-line);
 }
 .project-track-surface {
   position: relative;
@@ -192,30 +188,30 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  border-left: 2px solid #e4bc72;
+  border-left: 2px solid var(--desk-line);
   z-index: 3;
   pointer-events: none;
-  box-shadow: 0 0 8px #c3a35a44;
+  box-shadow: none;
 }
 .project-shared-playhead::before {
   content: '';
   position: absolute;
   left: -5px;
   top: 0;
-  border-top: 7px solid #e4bc72;
+  border-top: 7px solid var(--desk-line);
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
 }
 .project-track > strong {
   padding: 20px 10px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
-  color: #adb38d;
-  border-right: 1px solid #434a34;
+  color: var(--desk-ink);
+  border-right: 1px solid var(--desk-line);
 }
 .project-track-clips {
   display: grid;
-  background: repeating-linear-gradient(90deg, transparent, transparent 39px, #343b2b 40px);
+  background: var(--desk-paper);
   align-items: center;
   padding: 6px 2px;
   gap: 2px;
@@ -223,8 +219,8 @@
 .project-clip {
   min-width: 0;
   position: relative;
-  border: 1px solid #66744d;
-  background: #35442f;
+  border: 1px solid var(--desk-line);
+  background: var(--desk-paper);
   border-radius: 4px;
 }
 .coding-workspace .project-clip > button {
@@ -238,7 +234,7 @@
   border: 0;
   background: transparent;
   min-height: 52px;
-  font-size: 10px;
+  font-size: 12px;
   overflow: hidden;
 }
 .project-clip > button span {
@@ -248,125 +244,119 @@
   text-overflow: ellipsis;
 }
 .project-clip small {
-  font:
-    8px 'JetBrains Mono',
-    monospace;
-  color: #b1bc8b;
+  font: 8px var(--font-technical);
+  color: var(--desk-ink);
 }
 .project-clip[draggable='true'] {
   cursor: grab;
-  background: #514a2d;
-  border-color: #897845;
+  background: var(--desk-paper);
+  border-color: var(--desk-line);
 }
 .project-clip.selected {
-  outline: 2px solid #e3bf7a;
+  outline: 2px solid var(--desk-accent);
   outline-offset: 1px;
 }
 .project-clip.related {
-  box-shadow: inset 0 0 0 1px #d6b676;
+  box-shadow: none;
 }
 .project-clip.unexpected {
-  border-color: #de9678;
-  background: #563c2c;
+  border-color: var(--desk-line);
+  background: var(--desk-paper);
 }
 .project-clip.unexpected small {
-  color: #f3bea2;
+  color: var(--desk-ink);
 }
 .project-reorder {
   display: flex;
 }
 .coding-workspace .project-reorder button {
   width: 50%;
-  font-size: 11px;
+  font-size: 12px;
   padding: 2px;
   border: 0;
-  border-top: 1px solid #817044;
-  background: #554d2d;
+  border-top: 1px solid var(--desk-line);
+  background: var(--desk-paper);
 }
 .project-observed-link {
-  color: #b9af7b;
-  font-size: 10px;
+  color: var(--desk-ink);
+  font-size: 12px;
   padding: 10px 12px;
 }
 .project-event-inspector {
   padding: 14px;
-  border-left: 1px solid #495039;
+  border-left: 1px solid var(--desk-line);
   min-width: 0;
   max-height: 410px;
   overflow: auto;
-  background: #272e20;
+  background: var(--desk-paper);
 }
 .project-event-inspector h3 {
-  color: #e4c385;
+  color: var(--desk-ink);
   font-size: 13px;
 }
 .project-event-inspector h4 {
   margin-top: 15px;
   margin-bottom: 7px;
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.1em;
-  color: #9daa7b;
+  color: var(--desk-ink);
 }
 .project-event-inspector p {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
-  color: #b1b999;
+  color: var(--desk-ink);
 }
 .project-event-inspector pre,
 .project-event-inspector code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font:
-    10px/1.6 'JetBrains Mono',
-    monospace;
-  color: #d1d6b4;
+  font: 10px/1.6 var(--font-technical);
+  color: var(--desk-ink);
 }
 .project-run-result {
   padding: 14px;
   margin-top: 12px;
-  border: 1px solid #66754a;
-  background: #29351f;
+  border: 1px solid var(--desk-line);
+  background: var(--desk-paper);
 }
 .project-run-result.failed {
-  border-color: #af785b;
-  background: #392a21;
+  border-color: var(--desk-line);
+  background: var(--desk-paper);
 }
 .project-run-result.error {
-  border-color: #d3a85e;
-  background: #3a3220;
+  border-color: var(--desk-line);
+  background: var(--desk-paper);
 }
 .project-run-result.stale,
 .project-run-result.cancelled {
-  border-color: #777255;
-  background: #303022;
+  border-color: var(--desk-line);
+  background: var(--desk-paper);
 }
 .project-run-result strong {
   font-size: 13px;
 }
 .project-run-result p,
 .project-run-result small {
-  color: #c6c6a5;
-  font-size: 11px;
+  color: var(--desk-ink);
+  font-size: 12px;
   line-height: 1.7;
   margin-top: 6px;
 }
 .project-run-result details {
   margin-top: 10px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .project-run-result pre,
 .project-relevant-diff pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font:
-    10px/1.7 'JetBrains Mono',
-    monospace;
+  font: 10px/1.7 var(--font-technical);
   max-height: 300px;
   overflow: auto;
 }
 .replay-coverage {
-  color: #edc37e !important;
+  color: var(--desk-ink) !important;
 }
 .project-export {
   display: flex;
@@ -376,24 +366,24 @@
   align-items: center;
 }
 .project-export a {
-  border: 1px solid #8c7a4b;
+  border: 1px solid var(--desk-line);
   padding: 8px 12px;
   border-radius: 4px;
 }
 .project-export span {
-  font-size: 10px;
-  color: #a9b390;
+  font-size: 12px;
+  color: var(--desk-ink);
 }
 .project-relevant-diff {
   margin: 14px 0;
   padding: 10px;
-  border: 1px solid #404a32;
+  border: 1px solid var(--desk-line);
   font-size: 12px;
 }
 .project-relevant-diff summary,
 .project-code-review > summary {
   cursor: pointer;
-  color: #d9be87;
+  color: var(--desk-ink);
 }
 .project-code-review > summary {
   padding: 12px 0;
@@ -434,7 +424,7 @@
   }
   .project-event-inspector {
     border-left: 0;
-    border-top: 1px solid #495039;
+    border-top: 1px solid var(--desk-line);
     max-height: 240px;
   }
   .project-version-tabs button {
@@ -442,7 +432,7 @@
     align-items: start;
   }
   .project-replay-controls button {
-    font-size: 11px;
+    font-size: 12px;
   }
 }
 @media (max-width: 800px) {

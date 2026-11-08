@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { DeskDivider } from './DeskLayout'
+import { useDeskPreference, useCompactWindow } from './desk-preferences'
 import type { CodingSession } from '../../../shared/coding'
 import {
   type ReplayScenario,
@@ -58,6 +60,15 @@ export function ProjectReplayPanel({
   onVersion: (version: string) => void
   onDraftChange: (dirty: boolean) => void
 }) {
+  const compact = useCompactWindow()
+  const [wideInspector, setWideInspector] = useDeskPreference<boolean>('inspector', true)
+  const [compactInspector, setCompactInspector] = useDeskPreference<boolean>(
+    'compact-inspector',
+    false,
+  )
+  const inspectorOpen = compact ? compactInspector : wideInspector
+  const setInspectorOpen = compact ? setCompactInspector : setWideInspector
+  const [inspectorWidth, setInspectorWidth] = useDeskPreference<number>('inspector-width', 300)
   const replay = session.projectReplay,
     saved = replay?.saved
   const [doc, setDoc] = useState(() => initialDocument(session))
@@ -67,7 +78,14 @@ export function ProjectReplayPanel({
   const [suggestions, setSuggestions] = useState<AppSuggestion[]>([]),
     [suggestionsError, setSuggestionsError] = useState('')
   const [reviewingProposal, setReviewingProposal] = useState(false)
+  const [browserShare, setBrowserShare] = useDeskPreference<number>('replay-browser-share', 55, {
+    min: 30,
+    max: 70,
+  })
   const [version, setVersion] = useState('baseline')
+  const [nativeFrame, setNativeFrame] = useState(false)
+  const [dragging, setDragging] = useState('')
+  const tracks = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState('final')
   const [orderDraft, setOrderDraft] = useState<string[] | null>(() => {
     try {
@@ -144,7 +162,7 @@ export function ProjectReplayPanel({
     } else if (appApproval && !element.open) {
       element.open = true
       autoOpened.current = true
-    } else if (!session.busy && autoOpened.current) {
+    } else if (!appApproval && autoOpened.current) {
       element.open = false
       autoOpened.current = false
     }
@@ -274,18 +292,61 @@ export function ProjectReplayPanel({
       (item.track === 'ui' ? 1 : 0)
     )
   }
-  function inspect(key: string) {
+  useEffect(() => {
+    const surface = tracks.current
+    if (!surface) return
+    function revealSelected() {
+      if (!surface) return
+      const clip = surface.querySelector<HTMLElement>('.project-clip.selected')
+      if (!clip) return
+      const bounds = surface.getBoundingClientRect(),
+        selectedBounds = clip.getBoundingClientRect()
+      if (selectedBounds.left < bounds.left + 110)
+        surface.scrollLeft -= bounds.left + 110 - selectedBounds.left + 12
+      else if (selectedBounds.right > bounds.right)
+        surface.scrollLeft += selectedBounds.right - bounds.right + 12
+    }
+    revealSelected()
+    const observer = new ResizeObserver(revealSelected)
+    observer.observe(surface)
+    return () => observer.disconnect()
+  }, [selected, version, run?.id])
+  function inspect(key: string, details = false) {
     setSelected(key)
+    if (details) setInspectorOpen(true)
   }
   return (
-    <section className="project-replay" aria-label="Project browser replay">
+    <section
+      className={`project-replay ${saved ? 'has-saved' : ''}`}
+      aria-label="Project browser replay"
+    >
       <div className="project-replay-heading">
         <div>
           <span className="cut-eyebrow">COMPARE & REPLAY</span>
-          <h2>{saved?.scenario.name ?? 'Create a browser scenario'}</h2>
+          <h2 title={saved?.scenario.name}>
+            {saved?.scenario.name ?? 'Create a browser scenario'}
+          </h2>
+          {saved && (
+            <small>
+              Shared baseline <code>{session.baseline.revision.slice(0, 12)}</code>
+            </small>
+          )}
         </div>
-        <button disabled={session.busy} onClick={() => void api.review()}>
-          Refresh evidence
+        {saved && (
+          <button
+            aria-expanded={inspectorOpen}
+            aria-label={inspectorOpen ? 'Hide event detail' : 'Show event detail'}
+            onClick={() => setInspectorOpen(!inspectorOpen)}
+          >
+            Details
+          </button>
+        )}
+        <button
+          aria-label="Refresh evidence"
+          disabled={session.busy}
+          onClick={() => void api.review()}
+        >
+          Refresh
         </button>
       </div>
       <details className="replay-editor" open={initiallyOpen} ref={editor}>
@@ -341,386 +402,501 @@ export function ProjectReplayPanel({
       </details>
       {saved && (
         <>
-          <div className="project-version-tabs" role="tablist" aria-label="Replay versions">
-            {candidates.map((candidate) => {
-              const recorded = latest(candidate.id)
-              return (
-                <button
-                  key={candidate.id}
-                  role="tab"
-                  aria-selected={version === candidate.id}
-                  onClick={() => {
-                    setVersion(candidate.id)
-                    onVersion(candidate.id)
-                  }}
-                >
-                  <strong>
-                    {candidate.id === 'a'
-                      ? 'Candidate A'
-                      : candidate.id === 'b'
-                        ? 'Candidate B'
-                        : 'Baseline'}
-                  </strong>
-                  <span
-                    className={`replay-outcome ${stale(recorded) ? 'stale' : (recorded?.status ?? 'pending')}`}
+          <div className="layout-replay-selector">
+            <div className="project-version-tabs" role="tablist" aria-label="Replay versions">
+              {candidates.map((candidate) => {
+                const recorded = latest(candidate.id)
+                return (
+                  <button
+                    key={candidate.id}
+                    role="tab"
+                    aria-selected={version === candidate.id}
+                    onClick={() => {
+                      setVersion(candidate.id)
+                      onVersion(candidate.id)
+                    }}
                   >
-                    {stale(recorded)
-                      ? 'STALE'
-                      : recorded?.status === 'failed'
-                        ? 'PRODUCT BUG'
-                        : recorded?.status === 'error'
-                          ? 'EXECUTION ERROR'
-                          : (recorded?.status.toUpperCase() ?? 'NOT RUN')}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-          <div className="project-replay-controls">
-            <div>
-              <strong>Delivery order</strong>
-              <span data-testid="project-order">{order.join(' → ')}</span>
-            </div>
-            <button
-              id={`replay-run-${session.id}`}
-              disabled={session.busy || unsaved}
-              onClick={() => void api.replayProject(order, version)}
-            >
-              Replay{' '}
-              {version === 'baseline'
-                ? 'Baseline'
-                : version === 'a'
-                  ? 'Candidate A'
-                  : 'Candidate B'}
-            </button>
-            <button
-              className="cut-primary"
-              disabled={session.busy || unsaved}
-              onClick={() => void api.replayProject(order, 'all')}
-            >
-              Replay all
-            </button>
-            <button
-              disabled={
-                session.busy ||
-                unsaved ||
-                !replay?.runs.some(
-                  (r) =>
-                    r.version === 'baseline' && (r.status === 'passed' || r.status === 'failed'),
+                    <strong>
+                      {candidate.id === 'a'
+                        ? 'Approach A'
+                        : candidate.id === 'b'
+                          ? 'Approach B'
+                          : 'Baseline'}
+                    </strong>
+                    {candidate.id !== 'baseline' && (
+                      <small className="desk-version-ai">
+                        {session.providerRuns?.filter((r) => r.candidate === candidate.id).at(-1)
+                          ?.status === 'completed'
+                          ? 'AI turn completed'
+                          : session.providerRuns?.filter((r) => r.candidate === candidate.id).at(-1)
+                                ?.status === 'running'
+                            ? 'AI turn active'
+                            : session.providerRuns?.some((r) => r.candidate === candidate.id)
+                              ? 'AI turn interrupted'
+                              : 'No AI turn recorded'}
+                      </small>
+                    )}
+                    <span
+                      className={`replay-outcome ${stale(recorded) ? 'stale' : (recorded?.status ?? 'pending')}`}
+                    >
+                      {stale(recorded)
+                        ? 'STALE'
+                        : recorded?.status === 'failed'
+                          ? 'PRODUCT BUG'
+                          : recorded?.status === 'error'
+                            ? 'EXECUTION ERROR'
+                            : (recorded?.status.toUpperCase() ?? 'NOT RUN')}
+                    </span>
+                  </button>
                 )
-              }
-              onClick={() => void api.generateFixes()}
-            >
-              Generate two fixes
-            </button>
-            <button
-              disabled={session.busy || !saved || unsaved}
-              onClick={() => void api.generateFixes(true)}
-            >
-              Generate Candidate A first
-            </button>
-            {session.busy && <button onClick={() => void api.cancel()}>Cancel replay</button>}
-          </div>
-          {(changedOrder || unsaved) && (
-            <p className="replay-feedback" role="status">
-              {unsaved
-                ? 'Scenario edited — saved evidence is stale until saved and rerun.'
-                : 'Order edited — recorded outcomes are stale. Press Replay to verify.'}
-            </p>
-          )}
-          <p className="replay-comparison" aria-label="Comparison conclusion">
-            {comparison}
-          </p>
-          <div className="project-browser">
-            <div>
-              <span>
-                Recorded Chromium state ·{' '}
-                {version === 'baseline' ? 'Baseline' : `Candidate ${version.toUpperCase()}`}
-              </span>
-              {image && (
-                <a href={image} target="_blank" rel="noreferrer">
-                  Open full browser frame
-                </a>
-              )}
+              })}
             </div>
-            <div className="project-browser-frame">
-              {image ? (
-                <img src={image} alt={`Captured browser: ${event?.label ?? 'checkpoint'}`} />
-              ) : (
-                <p>
-                  {session.busy
-                    ? session.activity
-                    : 'Run the saved scenario to capture real browser state.'}
-                </p>
-              )}
-            </div>
-            <div>
-              <span>
-                {event?.label ?? 'No captured checkpoint'}
-                {event && ` · ${event.atMs} ms`}
-              </span>
-              <strong>
-                {isStale
-                  ? 'STALE EVIDENCE'
-                  : run?.status === 'failed'
-                    ? 'PRODUCT BUG'
-                    : run?.status === 'error'
-                      ? 'EXECUTION ERROR'
-                      : (run?.status.toUpperCase() ?? 'NOT RUN')}
-              </strong>
+            <div className="project-replay-controls">
+              <button
+                id={`replay-run-${session.id}`}
+                disabled={session.busy || unsaved}
+                onClick={() => {
+                  if (editor.current) editor.current.open = false
+                  void api.replayProject(order, version)
+                }}
+              >
+                Replay{' '}
+                {version === 'baseline'
+                  ? 'Baseline'
+                  : version === 'a'
+                    ? 'Approach A'
+                    : 'Approach B'}
+              </button>
+              <button
+                className="cut-primary"
+                disabled={session.busy || unsaved}
+                onClick={() => {
+                  if (editor.current) editor.current.open = false
+                  void api.replayProject(order, 'all')
+                }}
+              >
+                Replay all
+              </button>
+              {session.busy && <button onClick={() => void api.cancel()}>Cancel replay</button>}
             </div>
           </div>
-          <div className="project-replay-workbench">
-            <div className="project-timeline" aria-label="Aligned replay timeline">
-              <div className="project-timeline-heading">
-                <h3>Execution timeline</h3>
-                <span>Corresponding checkpoints stay aligned across versions.</span>
-                <button
-                  disabled={!run?.firstUnexpected}
-                  onClick={() => run?.firstUnexpected && inspect(run.firstUnexpected)}
-                >
-                  First unexpected state
-                </button>
-              </div>
-              {run ? (
-                <>
-                  <label className="project-scrubber">
-                    Shared playhead
-                    <input
-                      aria-label="Replay playhead"
-                      type="range"
-                      min={0}
-                      max={Math.max(0, run.events.length - 1)}
-                      value={Math.max(
-                        0,
-                        run.events.findIndex((e) => e.key === event?.key),
-                      )}
-                      onChange={(e) => inspect(run.events[Number(e.target.value)].key)}
-                    />
-                  </label>
-                  <div className="project-tracks">
-                    <div className="project-track-surface">
-                      {event && (
-                        <div
-                          className="project-shared-playhead"
-                          data-testid="shared-playhead"
-                          aria-hidden="true"
-                          style={{
-                            left: `calc(${110 * (1 - (column(event) - 0.5) / columns)}px + ${(100 * (column(event) - 0.5)) / columns}%)`,
-                          }}
-                        />
-                      )}
-                      {(['action', 'response', 'ui'] as const).map((track) => (
-                        <div key={track} className="project-track">
-                          <strong>
-                            {track === 'action'
-                              ? 'User actions'
-                              : track === 'response'
-                                ? 'Network responses'
-                                : 'Observed UI'}
-                          </strong>
-                          <div
-                            className="project-track-clips"
-                            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
-                          >
-                            {run.events
-                              .filter((item) => item.track === track)
-                              .map((item) => (
-                                <div
-                                  key={item.key}
-                                  className={`project-clip ${event?.key === item.key ? 'selected' : ''} ${item.unexpected ? 'unexpected' : ''} ${event?.requestId && item.requestId === event.requestId ? 'related' : ''}`}
-                                  style={{ gridColumn: column(item) }}
-                                  draggable={track === 'response' && !session.busy}
-                                  onDragStart={(e) =>
-                                    e.dataTransfer.setData(
-                                      'text/parallax-project-response',
-                                      item.requestId!,
-                                    )
-                                  }
-                                  onDragOver={(e) => {
-                                    if (track === 'response') e.preventDefault()
-                                  }}
-                                  onDrop={(e) => {
-                                    e.preventDefault()
-                                    const moved = e.dataTransfer.getData(
-                                      'text/parallax-project-response',
-                                    )
-                                    if (
-                                      !session.busy &&
-                                      track === 'response' &&
-                                      order.includes(moved)
-                                    )
-                                      move(moved, order.indexOf(item.requestId!))
-                                  }}
-                                  data-testid={
-                                    track === 'response'
-                                      ? `project-response-${item.requestId}`
-                                      : undefined
-                                  }
-                                >
-                                  <button
-                                    aria-label={`Inspect ${item.key}`}
-                                    aria-pressed={event?.key === item.key}
-                                    onClick={() => inspect(item.key)}
-                                    title={`${item.label}${item.detail ? ` · ${item.detail}` : ''}`}
-                                  >
-                                    <span>{item.label}</span>
-                                    <small>
-                                      {item.unexpected
-                                        ? 'UNEXPECTED'
-                                        : item.delivery === 'cancelled'
-                                          ? 'CANCELLED'
-                                          : `${item.atMs} ms`}
-                                    </small>
-                                  </button>
-                                  {track === 'response' && (
-                                    <div className="project-reorder">
-                                      <button
-                                        aria-label={`Move response ${item.requestId} earlier`}
-                                        disabled={
-                                          session.busy ||
-                                          !order.includes(item.requestId!) ||
-                                          order[0] === item.requestId
-                                        }
-                                        onClick={() =>
-                                          move(item.requestId!, order.indexOf(item.requestId!) - 1)
-                                        }
-                                      >
-                                        ←
-                                      </button>
-                                      <button
-                                        aria-label={`Move response ${item.requestId} later`}
-                                        disabled={
-                                          session.busy ||
-                                          !order.includes(item.requestId!) ||
-                                          order.at(-1) === item.requestId
-                                        }
-                                        onClick={() =>
-                                          move(item.requestId!, order.indexOf(item.requestId!) + 1)
-                                        }
-                                      >
-                                        →
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  {event?.requestId && event.track !== 'action' && (
-                    <p className="project-observed-link">
-                      {observed?.delivery === 'cancelled'
-                        ? `Request ${event.requestId} cancelled — fixture not consumed; UI observed at the checkpoint.`
-                        : `Controlled response ${event.requestId} → observed UI checkpoint · body-consumption barrier + ${saved.scenario.settleMs} ms settle`}
-                    </p>
-                  )}
-                </>
-              ) : (
-                <p>No simulated timeline. Checkpoints appear after actual execution.</p>
-              )}
-            </div>
-            <aside className="project-event-inspector" aria-label="Replay checkpoint inspector">
-              <h3>{event?.label ?? 'Select a checkpoint'}</h3>
-              <p>
-                {isStale ? 'This recording is stale. ' : ''}
-                {observed?.checked
-                  ? 'Assertion checked at this point.'
-                  : 'Intermediate observation; final assertion still applies.'}
+          <div className="layout-replay-feedback">
+            {(changedOrder || unsaved) && (
+              <p className="replay-feedback" role="status">
+                {unsaved
+                  ? 'Scenario edited — saved evidence is stale until saved and rerun.'
+                  : 'Order edited — recorded outcomes are stale. Press Replay to verify.'}
               </p>
-              {request && (
-                <>
-                  <h4>Request</h4>
-                  <code>
-                    {request.method} {request.url}
-                  </code>
-                  <h4>Response fixture</h4>
-                  <pre>{JSON.stringify(request.json, null, 2)}</pre>
-                  <p>
-                    {event?.track === 'action'
-                      ? 'Request captured and held; no response has been delivered at this action checkpoint.'
-                      : observed?.delivery === 'cancelled'
-                        ? 'Request cancelled: fixture was not consumed.'
-                        : 'Observed after controlled delivery.'}
-                  </p>
-                </>
-              )}
-              <h4>Expected behavior</h4>
-              <p>{recordedExpected?.description}</p>
-              <pre>{JSON.stringify(recordedExpected?.texts, null, 2)}</pre>
-              <h4>Actual observed UI</h4>
-              <pre>{JSON.stringify(observed?.texts ?? [], null, 2)}</pre>
-            </aside>
-          </div>
-          {run && (
-            <div className={`project-run-result ${isStale ? 'stale' : run.status}`} role="status">
-              <strong>
-                {isStale
-                  ? 'Stale result — rerun this source and scenario'
-                  : run.status === 'error'
-                    ? 'Execution error — assertion not completed'
-                    : run.status === 'failed'
-                      ? 'Product bug — observed behavior violated the assertion'
-                      : run.status === 'cancelled'
-                        ? 'Replay cancelled — no completed verification'
-                        : run.status === 'running'
-                          ? 'Real browser execution in progress'
-                          : 'Scenario passed'}
-              </strong>
-              <p>{run.error ?? saved.scenario.expected.description}</p>
-              {run.coverage.different && (
-                <p className="replay-coverage">
-                  Coverage changed · cancelled: {run.coverage.cancelled.join(', ') || 'none'} ·
-                  missing: {run.coverage.missing.join(', ') || 'none'} · unexpected:{' '}
-                  {run.coverage.unexpected.join(', ') || 'none'}. This is not equivalent coverage.
-                </p>
-              )}
-              <small>
-                Scenario r{run.scenarioRevision} · {run.scenarioDigest.slice(0, 10)} · source{' '}
-                {run.sourceDigest.slice(0, 10)} · baseline {run.baselineRevision.slice(0, 10)} ·{' '}
-                {run.durationMs} ms
-              </small>
-              <details>
-                <summary>Actual execution output</summary>
-                <pre>{run.output}</pre>
-              </details>
-            </div>
-          )}
-          <div className="project-export">
-            <a
-              href={
-                !session.busy && !unsaved
-                  ? `/api/coding/sessions/${session.id}/replay/export?order=${order.join(',')}`
-                  : undefined
-              }
-              aria-disabled={session.busy || unsaved}
-              download
-            >
-              Export regression test
-            </a>
-            <span>
-              Standalone test includes the fixtures, fixed actions, strict coverage check, and run
-              instructions.
-            </span>
-          </div>
-          <details className="project-relevant-diff">
-            <summary>
-              {version === 'baseline'
-                ? 'Baseline has no candidate patch'
-                : `Relevant diff · Candidate ${version.toUpperCase()}`}
-            </summary>
-            <pre>
-              {session.candidates.find((c) => c.id === version)?.patch ??
-                'Captured baseline source is unchanged.'}
-            </pre>
-            {version !== 'baseline' && (
-              <a href={`/api/coding/sessions/${session.id}/patch/${version}`} download>
-                Export chosen patch
-              </a>
             )}
-          </details>
+            {dragging && (
+              <p className="desk-drag-feedback" role="status">
+                Dragging {saved.scenario.requests.find((r) => r.id === dragging)?.label ?? dragging}
+                . Drop on another response to change its delivery position.
+              </p>
+            )}
+          </div>
+          <div
+            className={`project-evidence-desk ${inspectorOpen ? '' : 'inspector-collapsed'} ${compact ? 'compact-inspector' : ''}`}
+            style={
+              {
+                '--inspector-width': `${inspectorWidth}px`,
+                '--browser-weight': `${browserShare}fr`,
+                '--timeline-weight': `${100 - browserShare}fr`,
+              } as CSSProperties
+            }
+          >
+            <div className="project-browser">
+              <div>
+                <span>
+                  Recorded Chromium state ·{' '}
+                  {version === 'baseline' ? 'Baseline' : `Approach ${version.toUpperCase()}`}
+                </span>
+                {image && (
+                  <button aria-pressed={nativeFrame} onClick={() => setNativeFrame(!nativeFrame)}>
+                    {nativeFrame ? 'Fit browser frame' : 'Browser at actual size'}
+                  </button>
+                )}
+                {image && (
+                  <a href={image} target="_blank" rel="noreferrer">
+                    Open full frame
+                  </a>
+                )}
+              </div>
+              <div className={`project-browser-frame ${nativeFrame ? 'frame-native' : ''}`}>
+                {image ? (
+                  <img src={image} alt={`Captured browser: ${event?.label ?? 'checkpoint'}`} />
+                ) : (
+                  <p>
+                    {session.busy
+                      ? session.activity
+                      : 'Run the saved scenario to capture real browser state.'}
+                  </p>
+                )}
+              </div>
+              <div>
+                <span>
+                  {event?.label ?? 'No captured checkpoint'}
+                  {event && ` · ${event.atMs} ms`}
+                </span>
+                <strong>
+                  {isStale
+                    ? 'STALE EVIDENCE'
+                    : run?.status === 'failed'
+                      ? 'PRODUCT BUG'
+                      : run?.status === 'error'
+                        ? 'EXECUTION ERROR'
+                        : (run?.status.toUpperCase() ?? 'NOT RUN')}
+                </strong>
+              </div>
+            </div>
+            <DeskDivider
+              label="Resize browser and timeline"
+              value={browserShare}
+              min={30}
+              max={70}
+              orientation="horizontal"
+              onChange={setBrowserShare}
+            />
+            <div className="project-replay-workbench">
+              <div className="project-timeline" aria-label="Aligned replay timeline">
+                <div className="project-timeline-heading">
+                  <div>
+                    <strong>Delivery order</strong>
+                    <span data-testid="project-order">{order.join(' → ')}</span>
+                  </div>
+                  <h3>Execution timeline</h3>
+                  <span>Corresponding checkpoints stay aligned across versions.</span>
+                  <button
+                    disabled={!run?.firstUnexpected}
+                    onClick={() => {
+                      if (run?.firstUnexpected) {
+                        inspect(run.firstUnexpected)
+                        setInspectorOpen(true)
+                      }
+                    }}
+                  >
+                    First unexpected state
+                  </button>
+                </div>
+                {run ? (
+                  <>
+                    <label className="project-scrubber">
+                      Shared playhead
+                      <input
+                        aria-label="Replay playhead"
+                        type="range"
+                        min={0}
+                        max={Math.max(0, run.events.length - 1)}
+                        value={Math.max(
+                          0,
+                          run.events.findIndex((e) => e.key === event?.key),
+                        )}
+                        onChange={(e) => inspect(run.events[Number(e.target.value)].key)}
+                      />
+                    </label>
+                    <div className="project-tracks" ref={tracks}>
+                      <div
+                        className="project-track-surface"
+                        style={{ minWidth: 110 + columns * 90 }}
+                      >
+                        {event && (
+                          <div
+                            className="project-shared-playhead"
+                            data-testid="shared-playhead"
+                            aria-hidden="true"
+                            style={{
+                              left: `calc(${110 * (1 - (column(event) - 0.5) / columns)}px + ${(100 * (column(event) - 0.5)) / columns}%)`,
+                            }}
+                          />
+                        )}
+                        {(['action', 'response', 'ui'] as const).map((track) => (
+                          <div
+                            key={track}
+                            className="project-track"
+                            style={{ minWidth: 110 + columns * 90 }}
+                          >
+                            <strong>
+                              {track === 'action'
+                                ? 'User actions'
+                                : track === 'response'
+                                  ? 'Network responses'
+                                  : 'Observed UI'}
+                            </strong>
+                            <div
+                              className="project-track-clips"
+                              style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+                            >
+                              {run.events
+                                .filter((item) => item.track === track)
+                                .map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className={`project-clip ${event?.key === item.key ? 'selected' : ''} ${item.unexpected ? 'unexpected' : ''} ${dragging === item.requestId && track === 'response' ? 'dragging' : ''} ${event?.requestId && item.requestId === event.requestId ? 'related' : ''}`}
+                                    style={{ gridColumn: column(item) }}
+                                    draggable={track === 'response' && !session.busy}
+                                    onDragStart={(e) => {
+                                      setDragging(item.requestId ?? '')
+                                      e.dataTransfer.setData(
+                                        'text/parallax-project-response',
+                                        item.requestId!,
+                                      )
+                                    }}
+                                    onDragEnd={() => setDragging('')}
+                                    onDragOver={(e) => {
+                                      if (track === 'response') e.preventDefault()
+                                    }}
+                                    onDrop={(e) => {
+                                      e.preventDefault()
+                                      const moved = e.dataTransfer.getData(
+                                        'text/parallax-project-response',
+                                      )
+                                      if (
+                                        !session.busy &&
+                                        track === 'response' &&
+                                        order.includes(moved)
+                                      )
+                                        move(moved, order.indexOf(item.requestId!))
+                                    }}
+                                    data-testid={
+                                      track === 'response'
+                                        ? `project-response-${item.requestId}`
+                                        : undefined
+                                    }
+                                  >
+                                    <button
+                                      aria-label={`Inspect ${item.key}`}
+                                      aria-pressed={event?.key === item.key}
+                                      onClick={() => inspect(item.key, true)}
+                                      title={`${item.label}${item.detail ? ` · ${item.detail}` : ''}`}
+                                    >
+                                      <span>{item.label}</span>
+                                      <small>
+                                        {item.unexpected
+                                          ? 'UNEXPECTED'
+                                          : item.delivery === 'cancelled'
+                                            ? 'CANCELLED'
+                                            : `${item.atMs} ms`}
+                                      </small>
+                                    </button>
+                                    {track === 'response' && (
+                                      <div className="project-reorder">
+                                        <button
+                                          aria-label={`Move response ${item.requestId} earlier`}
+                                          disabled={
+                                            session.busy ||
+                                            !order.includes(item.requestId!) ||
+                                            order[0] === item.requestId
+                                          }
+                                          onClick={() =>
+                                            move(
+                                              item.requestId!,
+                                              order.indexOf(item.requestId!) - 1,
+                                            )
+                                          }
+                                        >
+                                          ←
+                                        </button>
+                                        <button
+                                          aria-label={`Move response ${item.requestId} later`}
+                                          disabled={
+                                            session.busy ||
+                                            !order.includes(item.requestId!) ||
+                                            order.at(-1) === item.requestId
+                                          }
+                                          onClick={() =>
+                                            move(
+                                              item.requestId!,
+                                              order.indexOf(item.requestId!) + 1,
+                                            )
+                                          }
+                                        >
+                                          →
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    {event?.requestId && event.track !== 'action' && (
+                      <p className="project-observed-link">
+                        {observed?.delivery === 'cancelled'
+                          ? `Request ${event.requestId} cancelled — fixture not consumed; UI observed at the checkpoint.`
+                          : `Controlled response ${event.requestId} → observed UI checkpoint · body-consumption barrier + ${saved.scenario.settleMs} ms settle`}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p>No simulated timeline. Checkpoints appear after actual execution.</p>
+                )}
+              </div>
+              {inspectorOpen && (
+                <DeskDivider
+                  label="Resize event detail pane"
+                  value={inspectorWidth}
+                  min={240}
+                  max={480}
+                  reverse
+                  onChange={setInspectorWidth}
+                />
+              )}
+              <aside
+                className="project-event-inspector"
+                aria-label="Replay checkpoint inspector"
+                hidden={!inspectorOpen}
+              >
+                <button className="inspector-close" onClick={() => setInspectorOpen(false)}>
+                  Close event detail
+                </button>
+                <h3>{event?.label ?? 'Select a checkpoint'}</h3>
+                <p className="replay-comparison" aria-label="Comparison conclusion">
+                  {comparison}
+                </p>
+                <p>
+                  {isStale ? 'This recording is stale. ' : ''}
+                  {observed?.checked
+                    ? 'Assertion checked at this point.'
+                    : 'Intermediate observation; final assertion still applies.'}
+                </p>
+                {request && (
+                  <>
+                    <h4>Request</h4>
+                    <code>
+                      {request.method} {request.url}
+                    </code>
+                    <h4>Response fixture</h4>
+                    <pre>{JSON.stringify(request.json, null, 2)}</pre>
+                    <p>
+                      {event?.track === 'action'
+                        ? 'Request captured and held; no response has been delivered at this action checkpoint.'
+                        : observed?.delivery === 'cancelled'
+                          ? 'Request cancelled: fixture was not consumed.'
+                          : 'Observed after controlled delivery.'}
+                    </p>
+                  </>
+                )}
+                <h4>Expected behavior</h4>
+                <p>{recordedExpected?.description}</p>
+                <pre>{JSON.stringify(recordedExpected?.texts, null, 2)}</pre>
+                <h4>Actual observed UI</h4>
+                <pre>{JSON.stringify(observed?.texts ?? [], null, 2)}</pre>
+                <details className="project-relevant-diff">
+                  <summary>
+                    {version === 'baseline'
+                      ? 'Baseline has no candidate patch'
+                      : `Relevant diff · Approach ${version.toUpperCase()}`}
+                  </summary>
+                  <pre>
+                    {session.candidates.find((c) => c.id === version)?.patch ??
+                      'Captured baseline source is unchanged.'}
+                  </pre>
+                  {version !== 'baseline' && (
+                    <a href={`/api/coding/sessions/${session.id}/patch/${version}`} download>
+                      Export chosen patch
+                    </a>
+                  )}
+                </details>
+              </aside>
+            </div>
+          </div>
+          <div className="layout-replay-footer">
+            {run && (
+              <details
+                className={`project-run-result ${isStale ? 'stale' : run.status}`}
+                role="status"
+              >
+                <summary title={run.error ?? saved.scenario.expected.description}>
+                  <strong>
+                    {isStale
+                      ? 'Stale result — rerun this source and scenario'
+                      : run.status === 'error'
+                        ? 'Execution error — assertion not completed'
+                        : run.status === 'failed'
+                          ? 'Product bug — observed behavior violated the assertion'
+                          : run.status === 'cancelled'
+                            ? 'Replay cancelled — no completed verification'
+                            : run.status === 'running'
+                              ? 'Real browser execution in progress'
+                              : 'Scenario passed'}
+                  </strong>
+                  {comparison.startsWith('Tie') && <span> · Fixes tied</span>}
+                </summary>
+                <p>{run.error ?? saved.scenario.expected.description}</p>
+                {run.coverage.different && (
+                  <p className="replay-coverage">
+                    Coverage changed · cancelled: {run.coverage.cancelled.join(', ') || 'none'} ·
+                    missing: {run.coverage.missing.join(', ') || 'none'} · unexpected:{' '}
+                    {run.coverage.unexpected.join(', ') || 'none'}. This is not equivalent coverage.
+                  </p>
+                )}
+                <small>
+                  Scenario r{run.scenarioRevision} · {run.scenarioDigest.slice(0, 10)} · source{' '}
+                  {run.sourceDigest.slice(0, 10)} · baseline {run.baselineRevision.slice(0, 10)} ·{' '}
+                  {run.durationMs} ms
+                </small>
+                <details>
+                  <summary>Actual execution output</summary>
+                  <pre>{run.output}</pre>
+                </details>
+              </details>
+            )}
+            <details
+              className="layout-replay-tools"
+              onClick={(e) => {
+                if ((e.target as HTMLElement).closest('button,a')) {
+                  e.currentTarget.open = false
+                  e.currentTarget.querySelector('summary')?.focus()
+                }
+              }}
+            >
+              <summary>Compare & export</summary>
+              <div>
+                <div className="project-compare-actions">
+                  <h3>Compare approaches</h3>{' '}
+                  <button
+                    disabled={
+                      session.busy ||
+                      unsaved ||
+                      !replay?.runs.some(
+                        (r) =>
+                          r.version === 'baseline' &&
+                          (r.status === 'passed' || r.status === 'failed'),
+                      )
+                    }
+                    onClick={() => void api.generateFixes()}
+                  >
+                    Generate two fixes
+                  </button>
+                  <button
+                    disabled={session.busy || !saved || unsaved}
+                    onClick={() => void api.generateFixes(true)}
+                  >
+                    Generate Candidate A first
+                  </button>
+                </div>
+                <div className="project-export">
+                  <a
+                    href={
+                      !session.busy && !unsaved
+                        ? `/api/coding/sessions/${session.id}/replay/export?order=${order.join(',')}`
+                        : undefined
+                    }
+                    aria-disabled={session.busy || unsaved}
+                    download
+                  >
+                    Export regression test
+                  </a>
+                  <span>
+                    Standalone test includes the fixtures, fixed actions, strict coverage check, and
+                    run instructions.
+                  </span>
+                </div>
+              </div>
+            </details>
+          </div>
         </>
       )}
     </section>

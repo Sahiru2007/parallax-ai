@@ -49,7 +49,21 @@ export function CandidateRecovery({
     }
   }
   return (
-    <section className="candidate-recovery" aria-label="Candidate recovery">
+    <section
+      className="candidate-recovery"
+      aria-label="Candidate recovery"
+      data-turn-state={run?.status ?? (session.busy ? 'running' : 'none')}
+      data-verification-state={
+        staleReplay
+          ? 'stale'
+          : (replay?.status ??
+            (currentChecks.some((c) => c.status === 'failed')
+              ? 'failed'
+              : currentChecks.some((c) => c.status === 'passed')
+                ? 'passed'
+                : 'pending'))
+      }
+    >
       <div className="recovery-statuses">
         <div>
           <strong>{candidate?.name ?? 'Candidate'} · AI turn</strong>
@@ -93,7 +107,8 @@ export function CandidateRecovery({
         </div>
       </div>
       {run && (
-        <>
+        <details className="desk-recovery-details" open={run.status !== 'completed'}>
+          <summary>Tool rounds, receipts & recovery details</summary>
           <p>
             {run.provider} / <code>{run.model}</code> · Rounds {run.rounds ?? 0}/
             {run.maxToolRounds ?? 12} · Continuations {run.continuations ?? 0} · Requests{' '}
@@ -204,7 +219,7 @@ export function CandidateRecovery({
               ))}
             </details>
           ) : null}
-        </>
+        </details>
       )}
       {queued.map((id) => (
         <button

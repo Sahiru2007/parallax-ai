@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { command } from '../../runner/process.ts'
 import { WindowsCredentialStore } from '../../runner/credentials.ts'
-import { scenarioView } from './scenario-editor-helpers.ts'
+import { scenarioView, replayTools } from './scenario-editor-helpers.ts'
 import { sourceSnapshot } from '../../runner/coding-files.ts'
 import type { CodingSession } from '../../shared/coding.ts'
 import {
@@ -254,6 +254,7 @@ test('recovery UI: A then B, approval restart, separate replay status, exact res
     await expect(page.locator('.replay-editor')).toContainText('Replay scenario r1')
     await page.getByRole('button', { name: 'Replay Baseline', exact: true }).click()
     await finish()
+    await replayTools(page)
     await page.getByRole('button', { name: 'Generate Candidate A first', exact: true }).click()
     let s = await finish()
     expect(s.providerRuns![0].status).toBe('completed')
@@ -266,7 +267,7 @@ test('recovery UI: A then B, approval restart, separate replay status, exact res
     await expect(page.getByRole('region', { name: 'Command approval' })).toBeVisible()
     const originalApproval = (await state()).approval!.id
     await page
-      .getByRole('tab', { name: /Candidate B/ })
+      .getByRole('tab', { name: /Approach B/ })
       .first()
       .click()
     await stop(runner!)

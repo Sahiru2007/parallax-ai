@@ -30,7 +30,6 @@ import {
   X,
   XCircle,
 } from 'lucide-react'
-import { Logo } from '../../components/ui'
 import {
   SAMPLE_TASK,
   type Investigation,
@@ -44,6 +43,8 @@ import {
 import { useInvestigation } from './useInvestigation'
 import { Timeline } from './Timeline'
 import './studio.css'
+import './desk.css'
+import './pickup-desk.css'
 
 const names: Record<VersionId, string> = {
   baseline: 'Baseline',
@@ -455,7 +456,10 @@ export default function AgentWorkspace() {
     <div className="studio">
       <header className="cut-topbar">
         <a className="cut-brand" href="/" aria-label="PARALLAX agent workspace">
-          <Logo small />
+          <span className="desk-mark" aria-hidden="true">
+            <i />
+            <i />
+          </span>
           <strong>
             PARALLAX<span>AI</span>
           </strong>
