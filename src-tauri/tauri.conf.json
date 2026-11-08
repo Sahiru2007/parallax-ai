@@ -7,23 +7,10 @@
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build && node scripts/prepare-desktop.mjs"
   },
   "app": {
-    "windows": [
-      {
-        "title": "PARALLAX AI",
-        "label": "main",
-        "width": 1520,
-        "height": 980,
-        "minWidth": 900,
-        "minHeight": 640,
-        "center": true,
-        "backgroundColor": "#0b0d16",
-        "resizable": true,
-        "fullscreen": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
       "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1420; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
@@ -31,7 +18,28 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "resources": [
+      "resources/desktop/*.json",
+      "resources/desktop/node/**/*",
+      "resources/desktop/git/**/*",
+      "resources/desktop/node_modules/**/*",
+      "resources/desktop/runner/**/*",
+      "resources/desktop/shared/**/*",
+      "resources/desktop/demo-seed/**/*",
+      "resources/desktop/frontend/**/*",
+      "resources/desktop/browsers/chromium_headless_shell-*/**/*",
+      "resources/desktop/browsers/ffmpeg-*/**/*"
+    ],
+    "windows": {
+      "webviewInstallMode": { "type": "offlineInstaller", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "startMenuFolder": "PARALLAX AI",
+        "displayLanguageSelector": false,
+        "compression": "zlib"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

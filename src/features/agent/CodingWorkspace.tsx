@@ -17,6 +17,7 @@ import { useCoding } from './useCoding'
 import { ProjectReplayPanel } from './ProjectReplayPanel'
 import { ProviderSettingsPanel } from './ProviderSettingsPanel'
 import { CandidateRecovery } from './CandidateRecovery'
+import { nativeWindow, pickRepository } from './native-desktop'
 import { providerName, type ProviderId } from '../../../shared/providers'
 import './studio.css'
 import './coding.css'
@@ -25,6 +26,7 @@ import './desktop-layout.css'
 
 export default function CodingWorkspace() {
   const api = useCoding()
+  const [pickerError, setPickerError] = useState('')
   const [railOpen, setRailOpen] = useDeskPreference<boolean>('rail', true)
   const [conversationOpen, setConversationOpen] = useDeskPreference<boolean>('conversation', true)
   const [conversationWidth, setConversationWidth] = useDeskPreference<number>(
@@ -332,7 +334,32 @@ export default function CodingWorkspace() {
                 <button type="submit" disabled={openingRepo || api.connecting}>
                   Open repository
                 </button>
+                {nativeWindow() && (
+                  <button
+                    type="button"
+                    disabled={openingRepo || api.connecting}
+                    onClick={async () => {
+                      setOpeningRepo(true)
+                      setPickerError('')
+                      try {
+                        const selected = await pickRepository(repoPath)
+                        if (selected) {
+                          setPath(selected)
+                          setTarget(null)
+                          await api.openRepo(selected)
+                        }
+                      } catch (error) {
+                        setPickerError(error instanceof Error ? error.message : String(error))
+                      } finally {
+                        setOpeningRepo(false)
+                      }
+                    }}
+                  >
+                    Browse folders…
+                  </button>
+                )}
               </form>
+              {pickerError && <p role="alert">{pickerError}</p>}
               {api.repo && (
                 <div className="coding-baseline">
                   <strong>{api.repo.name}</strong>

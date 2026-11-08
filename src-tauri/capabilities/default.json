@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Phase 1 renders local mock data and requires no privileged IPC permissions.",
+  "description": "The main workspace may select a repository and open a recorded PNG. Commands also check their window and origin. No shell or arbitrary filesystem IPC is exposed.",
   "windows": ["main"],
   "permissions": []
 }

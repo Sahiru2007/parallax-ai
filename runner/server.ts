@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -19,6 +19,7 @@ import { WindowsCredentialStore } from './credentials.ts'
 import { redactSecrets } from './provider-secrets.ts'
 import type { ModelSelection } from '../shared/providers.ts'
 import { replaySuggestions } from './replay-suggestions.ts'
+import { desktopAsset } from './desktop-http.ts'
 
 const root = resolve(
   process.env.PARALLAX_REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..'),
@@ -61,6 +62,11 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
 }
 const server = createServer(async (request, response) => {
   try {
+    if (
+      process.env.PARALLAX_DESKTOP_SECRET &&
+      request.headers['x-parallax-desktop'] !== process.env.PARALLAX_DESKTOP_SECRET
+    )
+      return json(response, 403, { error: 'Native application connection required.' })
     const host = request.headers.host ?? ''
     if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host))
       return json(response, 403, { error: 'Local runner only.' })
@@ -73,6 +79,21 @@ const server = createServer(async (request, response) => {
     )
       return json(response, 403, { error: 'Foreign origins cannot access this local runner.' })
     const url = new URL(request.url ?? '/', `http://${host}`)
+    if (
+      request.method === 'GET' &&
+      !url.pathname.startsWith('/api/') &&
+      process.env.PARALLAX_DESKTOP_STATIC_DIR
+    )
+      return await desktopAsset(process.env.PARALLAX_DESKTOP_STATIC_DIR, url.pathname, response)
+    if (
+      request.method === 'POST' &&
+      url.pathname === '/api/desktop/shutdown' &&
+      process.env.PARALLAX_DESKTOP_SECRET
+    ) {
+      json(response, 200, { stopping: true })
+      void shutdown()
+      return
+    }
     if (request.method === 'GET' && url.pathname === '/api/config')
       return json(response, 200, {
         token,
@@ -433,11 +454,17 @@ const server = createServer(async (request, response) => {
     else response.end()
   }
 })
-server.listen(port, '127.0.0.1', () =>
+server.listen(port, '127.0.0.1', () => {
+  const bound = server.address()
+  if (process.env.PARALLAX_DESKTOP_READY && bound && typeof bound !== 'string')
+    void writeFile(
+      process.env.PARALLAX_DESKTOP_READY,
+      JSON.stringify({ port: bound.port, pid: process.pid }),
+    )
   console.log(
-    `PARALLAX local runner · http://127.0.0.1:${port} · provider settings ready · pickup OpenAI environment ${providerState().configured ? 'configured' : 'not configured'}`,
-  ),
-)
+    `PARALLAX local runner · http://127.0.0.1:${bound && typeof bound !== 'string' ? bound.port : port} · provider settings ready · pickup OpenAI environment ${providerState().configured ? 'configured' : 'not configured'}`,
+  )
+})
 server.on('error', (error) => {
   console.error(`Runner could not start: ${error.message}`)
   process.exitCode = 1

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Investigation, RunnerConfig, Schedule } from '../../../shared/investigation'
+import { nativeTransport } from './native-desktop'
 
 export function useInvestigation() {
   const [config, setConfig] = useState<RunnerConfig | null>(null)
@@ -46,6 +47,39 @@ export function useInvestigation() {
   }, [accept])
   useEffect(() => {
     if (!session?.id) return
+    if (nativeTransport()) {
+      let active = true,
+        checking = false
+      const id = session.id
+      const timer = window.setInterval(async () => {
+        if (checking) return
+        checking = true
+        try {
+          const response = await fetch('/api/config', { signal: AbortSignal.timeout(2000) })
+          if (!response.ok) throw new Error('Runner unavailable')
+          const config = (await response.json()) as RunnerConfig
+          const responseState = await fetch(`/api/sessions/${id}`)
+          if (!responseState.ok) throw new Error('Session unavailable')
+          const state = (await responseState.json()) as Investigation
+          if (active && currentId.current === id) {
+            if (runnerToken.current !== config.token)
+              setSession((previous) => (previous ? { ...previous, sequence: -1 } : previous))
+            runnerToken.current = config.token
+            setConfig(config)
+            accept(state)
+            setConnecting(false)
+          }
+        } catch {
+          if (active) setConnecting(true)
+        } finally {
+          checking = false
+        }
+      }, 350)
+      return () => {
+        active = false
+        clearInterval(timer)
+      }
+    }
     const events = new EventSource(`/api/sessions/${session.id}/events`)
     let active = true
     events.addEventListener('state', (event: MessageEvent<string>) => {

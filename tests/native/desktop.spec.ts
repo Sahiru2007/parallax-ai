@@ -10,11 +10,15 @@ test('native Tauri window preserves all frontend interactions', async () => {
   const page = browser
     .contexts()
     .flatMap((context) => context.pages())
-    .find((candidate) => /127\.0\.0\.1:1420|tauri\.localhost|^tauri:/.test(candidate.url()))
+    .find((candidate) =>
+      /127\.0\.0\.1:1420|(?:tauri|parallax)\.localhost|^(?:tauri|parallax):/.test(candidate.url()),
+    )
   if (!page) {
     await browser.close()
     throw new Error('No PARALLAX Tauri WebView2 page was found. Start the native app first.')
   }
+  const originalUrl = page.url()
+  await page.goto(new URL('/legacy', originalUrl).href)
   const saved = await page.evaluate(() => localStorage.getItem('parallax-phase1'))
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -32,7 +36,7 @@ test('native Tauri window preserves all frontend interactions', async () => {
         return runtime?.metadata?.currentWindow?.label
       })
       expect(windowLabel).toBe('main')
-      await expect(page).toHaveTitle('PARALLAX AI — Development Multiverse')
+      await expect(page).toHaveTitle('PARALLAX AI — Coding Desk')
       await page.evaluate(() => localStorage.removeItem('parallax-phase1'))
       await page.reload()
       await expect(page.locator('.react-flow__node-future')).toHaveCount(3)
@@ -121,7 +125,7 @@ test('native Tauri window preserves all frontend interactions', async () => {
       if (original === null) localStorage.removeItem('parallax-phase1')
       else localStorage.setItem('parallax-phase1', original)
     }, saved)
-    await page.reload()
+    await page.goto(originalUrl)
     await browser.close()
   }
 })

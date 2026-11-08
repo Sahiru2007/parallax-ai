@@ -10,6 +10,7 @@ import {
 import type { useCoding } from './useCoding'
 import './project-replay.css'
 import { ScenarioEditor } from './ScenarioEditor'
+import { nativeWindow, openFrame } from './native-desktop'
 import {
   analyzeDocument,
   draftFromInput,
@@ -84,6 +85,7 @@ export function ProjectReplayPanel({
   })
   const [version, setVersion] = useState('baseline')
   const [nativeFrame, setNativeFrame] = useState(false)
+  const [frameError, setFrameError] = useState('')
   const [dragging, setDragging] = useState('')
   const tracks = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState('final')
@@ -517,10 +519,24 @@ export function ProjectReplayPanel({
                   </button>
                 )}
                 {image && (
-                  <a href={image} target="_blank" rel="noreferrer">
+                  <a
+                    href={image}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(event) => {
+                      if (nativeWindow()) {
+                        event.preventDefault()
+                        setFrameError('')
+                        void openFrame(image).catch((error) =>
+                          setFrameError(`Could not open the captured frame: ${String(error)}`),
+                        )
+                      }
+                    }}
+                  >
                     Open full frame
                   </a>
                 )}
+                {frameError && <span role="alert">{frameError}</span>}
               </div>
               <div className={`project-browser-frame ${nativeFrame ? 'frame-native' : ''}`}>
                 {image ? (

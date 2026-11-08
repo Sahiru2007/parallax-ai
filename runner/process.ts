@@ -41,6 +41,8 @@ export async function command(
     delete environment.PARALLAX_GEMINI_TEST_URL
     delete environment.PARALLAX_MODEL
     delete environment.PARALLAX_OPENAI_TEST_URL
+    delete environment.PARALLAX_DESKTOP_SECRET
+    delete environment.PARALLAX_DESKTOP_READY
     const child = spawn(executable, args, {
       cwd,
       windowsHide: true,

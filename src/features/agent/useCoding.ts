@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CodingConfig, CodingRepo, CodingSession } from '../../../shared/coding'
 import type { ProviderSettings } from '../../../shared/providers'
+import { nativeTransport } from './native-desktop'
 
 export function useCoding() {
   const [config, setConfig] = useState<CodingConfig | null>(null)
@@ -118,6 +119,7 @@ export function useCoding() {
     let source: EventSource | undefined
     let checking = false
     function connect() {
+      if (nativeTransport()) return
       source = new EventSource(`/api/coding/sessions/${id}/events`)
       source.addEventListener('state', (event: MessageEvent<string>) => {
         if (active) accept(JSON.parse(event.data) as CodingSession)
@@ -148,6 +150,11 @@ export function useCoding() {
         }
         token.current = next.token
         setConfig(next)
+        if (nativeTransport()) {
+          const state = await fetch(`/api/coding/sessions/${id}`)
+          if (!state.ok) throw new Error('Retained session unavailable')
+          if (active && current.current === id) accept((await state.json()) as CodingSession)
+        }
         setConnecting(false)
         if (!source || source.readyState === EventSource.CLOSED) connect()
       } catch {
@@ -163,9 +170,12 @@ export function useCoding() {
     connect()
     // A development proxy can keep an SSE socket open after its upstream process dies.
     // Polling health detects that case and reopens the stream after runner recovery.
-    const heartbeat = window.setInterval(() => {
-      void synchronize()
-    }, 1000)
+    const heartbeat = window.setInterval(
+      () => {
+        void synchronize()
+      },
+      nativeTransport() ? 350 : 1000,
+    )
     return () => {
       active = false
       source?.close()
