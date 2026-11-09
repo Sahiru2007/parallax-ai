@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -176,6 +177,20 @@ const server = createServer(async (request, response) => {
     if (codingMatch) {
       const [, id, action] = codingMatch
       const state = coding.state(id)
+      const checkOutput = /^checks\/([a-f0-9-]{36})\/output$/.exec(action ?? '')
+      if (request.method === 'GET' && checkOutput) {
+        const file = await coding.checkOutputFile(id, checkOutput[1])
+        response.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Disposition': `attachment; filename="check-${checkOutput[1]}.log"`,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        })
+        createReadStream(file)
+          .on('error', () => response.destroy())
+          .pipe(response)
+        return
+      }
       if (request.method === 'GET' && action === 'replay/suggestions')
         return json(response, 200, {
           baseline: state.baseline.digest,

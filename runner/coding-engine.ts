@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events'
-import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, writeFile, rename, rm, realpath, lstat } from 'node:fs/promises'
+import { randomUUID, createHash } from 'node:crypto'
+import { createWriteStream } from 'node:fs'
+import { finished } from 'node:stream/promises'
+import { mkdir, readFile, readdir, writeFile, rm, realpath, lstat } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import type {
   CodingSession,
@@ -21,6 +23,9 @@ import {
   applyCandidate,
 } from './coding-files.ts'
 import { runCodingProvider } from './coding-provider.ts'
+import { clip, modelLimits, modelToolResult, sourceRange } from './model-context.ts'
+import { checkExcerpt, summarizeCheck } from './check-output.ts'
+import { replaceStateFile } from './state-files.ts'
 import { runProjectBatch, saveScenario, type ReplayHost } from './project-replay-engine.ts'
 import { validateScenario, replayOrder } from '../shared/project-replay.ts'
 import type { ModelSelection } from '../shared/providers.ts'
@@ -152,7 +157,7 @@ export class CodingEngine {
       .then(async () => {
         await mkdir(runtime.dir, { recursive: true })
         await writeFile(join(runtime.dir, 'session.tmp'), contents)
-        await rename(join(runtime.dir, 'session.tmp'), join(runtime.dir, 'session.json'))
+        await replaceStateFile(join(runtime.dir, 'session.tmp'), join(runtime.dir, 'session.json'))
       })
     await runtime.persistence
   }
@@ -247,7 +252,8 @@ export class CodingEngine {
       candidate.worktree,
       afterStop ? undefined : runtime.abort.signal,
     )
-    if (candidate.digest === current.digest) return current
+    if (candidate.digest === current.digest && !(candidate.files.length && !candidate.patch.trim()))
+      return current
     const diff = await diffSnapshot(
       runtime.baseline,
       current,
@@ -278,6 +284,15 @@ export class CodingEngine {
     this.log(runtime, 'read', `${candidate.name} · repository instructions`, text)
     return text
   }
+  replayContext(runtime: Runtime, candidate: CodingCandidate) {
+    const replay = runtime.state.projectReplay
+    return {
+      ...replay,
+      // Proposals remain available to the user; model context includes accepted shared setup only.
+      proposal: undefined,
+      runs: (replay?.runs ?? []).filter((run) => ['baseline', candidate.id].includes(run.version)),
+    }
+  }
   async turn(runtime: Runtime, candidateIds?: string[], resumeRun?: ProviderRun) {
     const state = runtime.state
     for (const candidate of state.candidates.filter(
@@ -300,9 +315,9 @@ export class CodingEngine {
       instructions +=
         '\nDependency directories are not linked to the original checkout. If needed, request approval to install dependencies into this worktree.'
       if (state.projectReplay?.saved)
-        instructions += `\nSaved browser scenario (immutable fixtures/assertion): ${JSON.stringify(state.projectReplay.saved)}\nActual replay evidence: ${JSON.stringify(state.projectReplay.runs.slice(-9))}\nUse run_replay to test your current candidate against the saved scenario. Propose changes with propose_replay for user review; never weaken the assertion to claim a fix. Request cancellation or altered request counts produce coverage differences, not equivalent verification.`
+        instructions += `\nSaved browser scenario (immutable fixtures/assertion): ${JSON.stringify(state.projectReplay.saved)}\nActual replay evidence: ${JSON.stringify(this.replayContext(runtime, candidate).runs.slice(-9))}\nUse run_replay to test your current candidate against the saved scenario. Propose changes with propose_replay for user review; never weaken the assertion to claim a fix. Request cancellation or altered request counts produce coverage differences, not equivalent verification.`
       if (state.compare)
-        instructions += `\nCompare approaches is enabled. Use a materially distinct approach for ${candidate.name}. ${candidate.id === 'b' ? `Approach A patch for reference:\n${state.candidates[0].patch}` : ''}`
+        instructions += `\nCompare approaches is enabled. Use a materially distinct approach for ${candidate.name}.`
       const selection = resumeRun ?? state.modelSelection
       if (!resumeRun && state.provider === 'live' && selection && this.providers)
         this.providers.assertReady(selection)
@@ -367,6 +382,14 @@ export class CodingEngine {
             this.changed(runtime)
           }
         },
+        onRequest: async (size) => {
+          if (recorded) {
+            recorded.requestSizes ??= []
+            recorded.requestSizes.push(size)
+            this.changed(runtime)
+            await runtime.persistence
+          }
+        },
         onDelta: (text) => {
           if (!text) return
           if (!streamEvent) {
@@ -391,7 +414,13 @@ export class CodingEngine {
             .filter((m) => m.role === 'user' && m.turn === (recorded?.turn ?? state.turn))
             .at(-1)!.content,
         history: state.messages
-          .filter((m) => m.turn < (recorded?.turn ?? state.turn))
+          .filter(
+            (m) =>
+              m.turn < (recorded?.turn ?? state.turn) &&
+              (m.role === 'user' ||
+                m.candidate === candidate.id ||
+                (!state.compare && !m.candidate)),
+          )
           .map(({ role, content }) => ({ role, content })),
         turn: state.turn,
         candidate: candidate.name,
@@ -403,6 +432,7 @@ export class CodingEngine {
             role: 'assistant',
             content: text,
             turn: recorded?.turn ?? state.turn,
+            candidate: candidate.id,
           })
           this.log(
             runtime,
@@ -512,6 +542,8 @@ export class CodingEngine {
     if (!checkpoint) {
       checkpoint = {
         version: 1,
+        candidate: candidate.id,
+        contextIsolationVersion: 1,
         rounds: resuming ? (run.rounds ?? 0) : 0,
         allowance: run.maxToolRounds ?? 12,
         ledger: [],
@@ -558,6 +590,18 @@ export class CodingEngine {
     }
     if (checkpoint.version !== 1 || !Array.isArray(checkpoint.ledger))
       throw new Error('Unsupported agent checkpoint. Retained files remain available.')
+    if (
+      runtime.state.compare &&
+      (checkpoint.context || checkpoint.instructions) &&
+      (checkpoint.candidate !== candidate.id || checkpoint.contextIsolationVersion !== 1)
+    )
+      throw new RecoveryRequired({
+        kind: 'uncertain',
+        message:
+          'This comparison checkpoint predates verified candidate isolation. Its conversation and edits are retained. Use a new follow-up in the retained worktrees; this historical provider context cannot be resumed safely.',
+      })
+    checkpoint.candidate = candidate.id
+    checkpoint.contextIsolationVersion = 1
     runtime.checkpoint = checkpoint
     runtime.checkpointRun = run
     runtime.proposalOnly = checkpoint.proposalOnly
@@ -612,7 +656,7 @@ export class CodingEngine {
       .then(async () => {
         const file = join(runtime.dir, `agent-${run.id}.json`)
         await writeFile(file + '.tmp', content)
-        await rename(file + '.tmp', file)
+        await replaceStateFile(file + '.tmp', file)
         await this.persist(runtime)
       })
     await runtime.checkpointWrites
@@ -627,7 +671,7 @@ export class CodingEngine {
   ): Promise<unknown> {
     const cp = runtime.checkpoint!
     await this.refresh(runtime, candidate)
-    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+    const same = (a: unknown, b: unknown) => this.toolIdentity(a) === this.toolIdentity(b)
     let call = cp.ledger.find((entry) => entry.key === key)
     if (call && (call.name !== name || !same(call.args, args)))
       throw new RecoveryRequired({
@@ -637,7 +681,7 @@ export class CodingEngine {
       })
     if (call?.status === 'completed') {
       this.log(runtime, 'agent', `Reused completed ${name}`, `Tool ${key}; no operation repeated.`)
-      return call.result
+      return this.progressResult(runtime, candidate, call)
     }
     if (call && (call.status === 'running' || call.status === 'uncertain')) {
       const recovered = await this.inspectTool(runtime, candidate, call)
@@ -647,7 +691,7 @@ export class CodingEngine {
           message:
             'A tool has an uncertain outcome. Review the inspection and choose skip or an explicitly approved rerun.',
         })
-      if (recovered === 'completed') return call.result
+      if (recovered === 'completed') return this.progressResult(runtime, candidate, call)
     }
     if (!call) {
       // A model can request the same command again after a lost response. Reuse its receipt
@@ -659,7 +703,10 @@ export class CodingEngine {
           same(entry.args, args) &&
           entry.afterDigest === candidate.digest,
       )
-      if (cached && ['run_command', 'write_file', 'delete_file', 'run_replay'].includes(name)) {
+      if (
+        cached &&
+        ['run_command', 'write_file', 'replace_in_file', 'delete_file', 'run_replay'].includes(name)
+      ) {
         call = { ...cached, key, reusedFrom: cached.key }
         cp.ledger.push(call)
         await this.saveCheckpoint(runtime)
@@ -669,7 +716,7 @@ export class CodingEngine {
           `Reused completed ${name}`,
           'The matching operation already has a durable result at this source revision.',
         )
-        return call.result
+        return this.progressResult(runtime, candidate, call)
       }
       call = { key, name, args, status: 'prepared', beforeDigest: candidate.digest }
       cp.ledger.push(call)
@@ -677,7 +724,7 @@ export class CodingEngine {
     }
     if (
       call.beforeDigest !== candidate.digest &&
-      ['write_file', 'delete_file', 'run_command', 'run_replay'].includes(name)
+      ['write_file', 'replace_in_file', 'delete_file', 'run_command', 'run_replay'].includes(name)
     ) {
       call.status = 'uncertain'
       call.inspected = `Source changed before this retained operation. Current SHA256 ${candidate.digest}. Inspect the file diff before deciding.`
@@ -688,6 +735,13 @@ export class CodingEngine {
     call.status = 'running'
     await this.saveCheckpoint(runtime)
     try {
+      if (name === 'replace_in_file') {
+        const path = await writablePath(candidate.worktree, String(args.path))
+        const before = await readFile(path, 'utf8')
+        const after = this.replacement(before, args)
+        call.expectedFileDigest = createHash('sha256').update(after).digest('hex')
+        await this.saveCheckpoint(runtime)
+      }
       if (
         name === 'write_file' &&
         typeof args.path === 'string' &&
@@ -702,7 +756,7 @@ export class CodingEngine {
       call.afterDigest = candidate.digest
       cp.sourceDigest = candidate.digest
       await this.saveCheckpoint(runtime)
-      return call.result
+      return this.progressResult(runtime, candidate, call)
     } catch (error) {
       if (
         name === 'run_command' &&
@@ -726,10 +780,107 @@ export class CodingEngine {
       call.status = 'completed'
       call.afterDigest = candidate.digest
       await this.saveCheckpoint(runtime)
-      return call.result
+      return this.progressResult(runtime, candidate, call)
     } finally {
       runtime.activeTool = undefined
     }
+  }
+  toolIdentity(value: unknown): string {
+    if (Array.isArray(value)) return JSON.stringify(value.map((v) => this.toolIdentity(v)))
+    if (value && typeof value === 'object')
+      return JSON.stringify(
+        Object.entries(value)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => [k, this.toolIdentity(v)]),
+      )
+    return JSON.stringify(value)
+  }
+  inspectionIdentity(name: string, args: Record<string, unknown>) {
+    const normalized = { ...args }
+    if (name === 'search_files' || name === 'list_files') {
+      name += '_page'
+      normalized.offset = 0
+    }
+    if (typeof normalized.path === 'string') {
+      normalized.path = normalized.path.replaceAll('\\', '/').replace(/^\.\//, '')
+      if (process.platform === 'win32') normalized.path = String(normalized.path).toLowerCase()
+    }
+    if (name === 'read_file') {
+      name = 'read_file_range'
+      normalized.start_line = 1
+      normalized.line_count = modelLimits.fileLines
+    }
+    return name + this.toolIdentity(normalized)
+  }
+  progressResult(runtime: Runtime, candidate: CodingCandidate, call: ToolReceipt): unknown {
+    const ledger = runtime.checkpoint!.ledger
+    const prior = ledger.filter(
+      (entry) =>
+        entry.key !== call.key &&
+        entry.status === 'completed' &&
+        entry.afterDigest === candidate.digest,
+    )
+    const equivalent = prior.filter(
+      (entry) =>
+        this.inspectionIdentity(entry.name, entry.args) ===
+        this.inspectionIdentity(call.name, call.args),
+    )
+    const inspections = prior.filter((entry) =>
+      [
+        'read_file',
+        'read_file_range',
+        'search_files',
+        'search_files_page',
+        'search_file',
+        'list_files',
+        'list_files_page',
+      ].includes(entry.name),
+    )
+    if (!equivalent.length && inspections.length !== 6) return call.result
+    const checks = runtime.state.checks
+      .filter((c) => c.candidate === candidate.id && c.digest === candidate.digest)
+      .slice(-3)
+    const note = {
+      unchangedSource: true,
+      equivalentPriorCalls: equivalent.length,
+      observed: inspections.slice(-5).map((entry) => {
+        const result = entry.result as
+          { startLine?: number; endLine?: number; totalLines?: number } | undefined
+        return {
+          receiptId: entry.key,
+          tool: entry.name,
+          path: entry.args.path,
+          startLine: result?.startLine,
+          endLine: result?.endLine,
+          totalLines: result?.totalLines,
+        }
+      }),
+      learned: checks.map((c) => ({
+        checkId: c.id,
+        status: c.status,
+        exitCode: c.exitCode,
+        summary: c.modelSummary,
+      })),
+      advice:
+        'Investigation has not changed source. Reuse the file ranges and check evidence already read. Inspect a specific error/log excerpt or run a focused reproduction using the verified command. Make a justified minimal edit when evidence supports one, otherwise state the concrete blocker; do not invent a fix or replace a valid command with a broader/malformed one.',
+    }
+    this.log(runtime, 'agent', 'Investigation progress check', JSON.stringify(note))
+    return call.result && typeof call.result === 'object' && !Array.isArray(call.result)
+      ? { ...call.result, progressNote: note }
+      : { content: call.result, progressNote: note }
+  }
+  replacement(before: string, args: Record<string, unknown>) {
+    if (typeof args.old_text !== 'string' || !args.old_text || typeof args.new_text !== 'string')
+      throw new Error('Provide nonempty old_text and a new_text string for one exact replacement.')
+    const index = before.indexOf(args.old_text)
+    if (index < 0 || before.indexOf(args.old_text, index + 1) >= 0)
+      throw new Error(
+        'old_text must match exactly once. Read the current file range and choose an unambiguous snippet.',
+      )
+    const after =
+      before.slice(0, index) + args.new_text + before.slice(index + args.old_text.length)
+    if (after.length > 200_000) throw new Error('Write content must be text under 200 KB.')
+    return after
   }
   async inspectTool(runtime: Runtime, candidate: CodingCandidate, call: ToolReceipt) {
     await this.refresh(runtime, candidate)
@@ -738,7 +889,14 @@ export class CodingEngine {
       'list_files',
       'search_files',
       'read_file',
+      'read_file_range',
+      'search_file',
+      'search_files_page',
+      'list_files_page',
+      'read_check_output',
+      'search_check_output',
       'inspect_diff',
+      'inspect_file_diff',
       'inspect_replay',
     ]
     if (safeReads.includes(call.name)) {
@@ -748,7 +906,11 @@ export class CodingEngine {
       return 'prepared' as const
     }
     let result: unknown
-    if (call.name === 'write_file' || call.name === 'delete_file') {
+    if (
+      call.name === 'write_file' ||
+      call.name === 'delete_file' ||
+      call.name === 'replace_in_file'
+    ) {
       const path = await writablePath(candidate.worktree, String(call.args.path))
       const content = await readFile(path, 'utf8').catch((error) => {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -756,6 +918,9 @@ export class CodingEngine {
       })
       if (
         (call.name === 'write_file' && content === call.args.content) ||
+        (call.name === 'replace_in_file' &&
+          content !== null &&
+          call.expectedFileDigest === createHash('sha256').update(content).digest('hex')) ||
         (call.name === 'delete_file' && content === null)
       )
         result = { path: call.args.path, digest: candidate.digest, recoveredByInspection: true }
@@ -933,7 +1098,7 @@ export class CodingEngine {
     const root = candidate.worktree
     if (
       runtime.proposalOnly &&
-      ['write_file', 'delete_file', 'run_command', 'run_replay'].includes(name)
+      ['write_file', 'replace_in_file', 'delete_file', 'run_command', 'run_replay'].includes(name)
     )
       throw new Error(
         'Scenario proposal is read-only. Return propose_replay for user review before changing code or running commands.',
@@ -950,35 +1115,112 @@ export class CodingEngine {
       )
       return { proposed: true, requiresUserReview: true }
     }
-    if (name === 'inspect_replay') return runtime.state.projectReplay ?? { runs: [] }
+    if (name === 'inspect_replay') return this.replayContext(runtime, candidate)
     if (name === 'run_replay')
       return runProjectBatch(this.replayHost(runtime), [candidate.id], args.order)
     if (name === 'read_instructions') return this.instructions(runtime, candidate)
-    if (name === 'list_files' || name === 'search_files') {
-      const snapshot = await sourceSnapshot(root, runtime.abort.signal)
-      const result =
-        name === 'list_files'
-          ? [...snapshot.files.keys()]
-          : [...snapshot.files]
-              .flatMap(([path, data]) =>
-                data
-                  .toString('utf8')
-                  .split('\n')
-                  .flatMap((line, i) =>
-                    line.includes(String(args.query))
-                      ? [`${path}:${i + 1}: ${line.slice(0, 500)}`]
-                      : [],
-                  ),
-              )
-              .slice(0, 200)
-      this.log(runtime, 'read', `${candidate.name} · ${name}`, result.join('\n'))
-      return result
+    if (name === 'read_check_output' || name === 'search_check_output') {
+      const check = runtime.state.checks.find(
+        (c) => c.id === args.check_id && c.candidate === candidate.id,
+      )
+      if (!check) throw new Error('Select a check ID belonging to this candidate.')
+      if (name === 'search_check_output' && (typeof args.query !== 'string' || !args.query))
+        throw new Error('Provide a nonempty literal query.')
+      if (!check.fullOutput)
+        return {
+          ...(modelToolResult('run_command', check) as object),
+          warning:
+            'Legacy check: complete output was not retained; only its stored excerpt is available.',
+        }
+      return {
+        checkId: check.id,
+        digest: check.digest,
+        stale: check.digest !== candidate.digest,
+        ...(await checkExcerpt(
+          join(runtime.dir, 'check-output', check.id + '.log'),
+          name === 'read_check_output' ? Number(args.start_line) : 1,
+          name === 'read_check_output' ? Number(args.line_count) : 40,
+          name === 'search_check_output' ? String(args.query) : undefined,
+        )),
+      }
     }
-    if (name === 'read_file') {
+    if (
+      [
+        'list_files',
+        'list_files_page',
+        'search_files',
+        'search_files_page',
+        'search_file',
+      ].includes(name)
+    ) {
+      const snapshot = await sourceSnapshot(root, runtime.abort.signal)
+      if (name === 'search_file') await writablePath(root, String(args.path))
+      const offset = name === 'search_file' || name.endsWith('_page') ? Number(args.offset) : 0
+      if (!Number.isInteger(offset) || offset < 0)
+        throw new Error('Search offset must be a nonnegative integer.')
+      if (!name.startsWith('list_files') && (typeof args.query !== 'string' || !args.query))
+        throw new Error('Provide a nonempty literal search query.')
+      const allResults = name.startsWith('list_files')
+        ? [...snapshot.files.keys()]
+        : [...snapshot.files]
+            .filter(([path]) => name !== 'search_file' || path === args.path)
+            .flatMap(([path, data]) =>
+              data
+                .toString('utf8')
+                .split('\n')
+                .flatMap((line, i) =>
+                  line.includes(String(args.query))
+                    ? [
+                        `${path}:${i + 1}: ${line.slice(Math.max(0, line.indexOf(String(args.query)) - 100), line.indexOf(String(args.query)) + 350)}`,
+                      ]
+                    : [],
+                ),
+            )
+      const result = allResults.slice(offset, offset + 200)
+      this.log(runtime, 'read', `${candidate.name} · ${name}`, result.join('\n'))
+      const projected = modelToolResult(name, result) as string[] | { items: string[] }
+      const items = Array.isArray(projected) ? projected : projected.items
+      return {
+        items,
+        offset,
+        totalMatches: allResults.length,
+        nextOffset: offset + items.length < allResults.length ? offset + items.length : undefined,
+        readMore: name.startsWith('list_files')
+          ? 'list_files_page(offset=nextOffset)'
+          : 'search_files_page(query, offset=nextOffset), or search_file(path, query, offset) to narrow it.',
+      }
+    }
+    if (name === 'read_file' || name === 'read_file_range') {
       await writablePath(root, String(args.path))
-      const content = await safeRead(root, String(args.path))
-      this.log(runtime, 'read', `${candidate.name} · ${args.path}`, content)
-      return content
+      const content = await safeRead(root, String(args.path), 5_000_000)
+      const title = `${candidate.name} · ${args.path}`
+      if (!runtime.state.events.some((e) => e.title === title && e.detail === content))
+        this.log(runtime, 'read', title, content)
+      const start = name === 'read_file' ? 1 : Number(args.start_line),
+        count = name === 'read_file' ? modelLimits.fileLines : Number(args.line_count)
+      if (
+        !Number.isInteger(start) ||
+        start < 1 ||
+        !Number.isInteger(count) ||
+        count < 1 ||
+        count > modelLimits.fileLines
+      )
+        throw new Error('Use a positive start_line and line_count between 1 and 120.')
+      return {
+        path: args.path,
+        digest: candidate.digest,
+        ...sourceRange(content, start, count),
+        readMore:
+          'Use read_file_range(path, start_line, line_count) for exact source, and replace_in_file for a focused edit. The complete file is in the UI activity.',
+      }
+    }
+    if (name === 'replace_in_file') {
+      const path = await writablePath(root, String(args.path))
+      const after = this.replacement(await readFile(path, 'utf8'), args)
+      await writeFile(path, after)
+      this.log(runtime, 'patch', `${candidate.name} · replace_in_file ${args.path}`)
+      await this.refresh(runtime, candidate)
+      return { path: args.path, digest: candidate.digest }
     }
     if (name === 'write_file' || name === 'delete_file') {
       const path = await writablePath(root, String(args.path))
@@ -992,10 +1234,35 @@ export class CodingEngine {
       await this.refresh(runtime, candidate)
       return { path: args.path, digest: candidate.digest }
     }
-    if (name === 'inspect_diff') {
+    if (name === 'inspect_diff' || name === 'inspect_file_diff') {
       await this.refresh(runtime, candidate)
       this.log(runtime, 'patch', `${candidate.name} · actual diff`, candidate.patch)
-      return candidate.patch
+      if (name === 'inspect_diff')
+        return {
+          digest: candidate.digest,
+          files: candidate.files.map(({ path, status }) => ({ path, status })),
+          patchExcerpt: clip(candidate.patch, 4500),
+          readMore: 'Use inspect_file_diff(path, start_line, line_count) for more patch lines.',
+        }
+      await writablePath(root, String(args.path))
+      const file = candidate.files.find((f) => f.path === args.path)
+      if (!file) throw new Error('Select a changed file from inspect_diff.')
+      const start = Number(args.start_line),
+        count = Number(args.line_count),
+        patch = file.patch
+      if (
+        !Number.isInteger(start) ||
+        start < 1 ||
+        !Number.isInteger(count) ||
+        count < 1 ||
+        count > 120
+      )
+        throw new Error('Use a positive start_line and at most 120 lines.')
+      return {
+        path: file.path,
+        digest: candidate.digest,
+        ...sourceRange(patch, start, count),
+      }
     }
     if (name === 'run_command') return this.runCommand(runtime, candidate, args)
     throw new Error(`Unknown repository tool: ${name}`)
@@ -1007,7 +1274,17 @@ export class CodingEngine {
       !args.args.every((a) => typeof a === 'string') ||
       typeof args.cwd !== 'string'
     )
-      throw new Error('Command requires executable, string args, and relative cwd.')
+      throw new Error(
+        'Command requires executable, string args, and relative cwd. Example: executable="node", args=["--test","check.test.cjs"], cwd=".". Do not include node in args.',
+      )
+    if (args.args[0] === args.executable || args.args[0] === args.executable + '.exe')
+      throw new Error(
+        `The executable is duplicated in args. Use executable="${args.executable}" and args=${JSON.stringify(args.args.slice(1))}; cwd stays ${JSON.stringify(args.cwd)}. No command executed.`,
+      )
+    if (args.executable === 'npm' && args.args[0] === 'mocha')
+      throw new Error(
+        'npm mocha is not an npm command. Keep the verified test command from the task, use npm run SCRIPT for a package script, or node with the installed Mocha CLI path. No command executed.',
+      )
     if (
       !['node', 'npm', 'npx', 'python', 'python3', 'pytest', 'cargo', 'go', 'dotnet'].includes(
         args.executable,
@@ -1074,6 +1351,12 @@ export class CodingEngine {
     runtime.state.activity = `Running ${check.command}`
     this.log(runtime, 'command', `${candidate.name} · ${check.command}`, `cwd: ${cwd}`)
     const event = runtime.state.events.at(-1)!
+    await mkdir(join(runtime.dir, 'check-output'), { recursive: true })
+    const outputFile = join(runtime.dir, 'check-output', check.id + '.log')
+    const completeOutput = createWriteStream(outputFile, { encoding: 'utf8' })
+    const outputFinished = finished(completeOutput)
+    void outputFinished.catch(() => {})
+    check.fullOutput = true
     let executable = request.executable,
       argv = request.args
     if (executable === 'node') executable = process.execPath
@@ -1096,22 +1379,44 @@ export class CodingEngine {
           }
         },
         onOutput: (chunk) => {
+          completeOutput.write(chunk)
           check.output = (check.output + chunk).slice(-150_000)
           event.detail = `cwd: ${cwd}\n${check.output}`
           this.changed(runtime)
         },
       })
-      Object.assign(check, result, { status: result.exitCode === 0 ? 'passed' : 'failed' })
+      // The UI owns one excerpt plus a complete durable log. Do not duplicate
+      // stdout/stderr into every check, ledger receipt and provider conversation.
+      Object.assign(check, {
+        output: result.output,
+        exitCode: result.exitCode,
+        status: result.exitCode === 0 ? 'passed' : 'failed',
+      })
     } catch (error) {
       check.status = runtime.abort.signal.aborted ? 'skipped' : 'failed'
       check.output += `\n${error instanceof Error ? error.message : String(error)}`
+      completeOutput.write(
+        redactSecrets(`\n${error instanceof Error ? error.message : String(error)}`),
+      )
       throw error
     } finally {
+      completeOutput.end()
+      await outputFinished
+      Object.assign(check, await summarizeCheck(outputFile))
       await this.refresh(runtime, candidate).catch(() => {})
       this.changed(runtime)
     }
     await this.persist(runtime)
     return check
+  }
+  async checkOutputFile(id: string, checkId: string) {
+    const runtime = this.sessions.get(id)
+    const check = runtime?.state.checks.find((c) => c.id === checkId)
+    if (!runtime || !check?.fullOutput)
+      throw new Error('Complete output is unavailable for this check.')
+    const file = join(runtime.dir, 'check-output', check.id + '.log')
+    if (!(await lstat(file)).isFile()) throw new Error('Check output is unavailable.')
+    return file
   }
   approve(id: string, requestId: string, allow: boolean) {
     const runtime = this.sessions.get(id)

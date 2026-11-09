@@ -26,6 +26,12 @@ export function CommandOutput({
           </div>
           <code>{check.command}</code>
           <small>{check.cwd}</small>
+          {check.fullOutput && (
+            <a href={`/api/coding/sessions/${session.id}/checks/${check.id}/output`} download>
+              Download complete output
+              {check.outputChars ? ` (${check.outputChars.toLocaleString()} characters)` : ''}
+            </a>
+          )}
           <pre>
             {check.output ||
               (check.status === 'running'

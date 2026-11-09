@@ -9,6 +9,7 @@ import {
   type DurableExecute,
 } from './continuation.ts'
 import { providerRequest } from './provider-retry.ts'
+import { geminiContext, measureGeminiRequest } from './model-context.ts'
 
 const root = 'https://generativelanguage.googleapis.com/v1beta'
 export function preferGeminiModels(models: string[]) {
@@ -194,32 +195,49 @@ export async function runGeminiAgent(
     }
     options.onRound?.(round, limit)
     let response: Response
+    const body = JSON.stringify({
+      contents: geminiContext(contents),
+      systemInstruction: {
+        parts: [
+          {
+            text:
+              c?.state.instructions ??
+              options.instructions ??
+              'Use the supplied tools to complete the user task.',
+          },
+        ],
+      },
+      tools: [{ functionDeclarations: declarations }],
+      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+      generationConfig: { candidateCount: 1, maxOutputTokens: 8192 },
+    })
+    if (Buffer.byteLength(body) > 512_000)
+      throw new RecoveryRequired({
+        kind: 'provider',
+        message:
+          'The 512 KB model-context budget was reached. Original instructions and provider-required signed context were preserved. Review the retained edits/checks and start a focused follow-up; no oversized request was sent.',
+      })
     try {
       response = await providerRequest(
         'gemini',
-        (requestSignal) =>
-          fetch(`${options.baseURL ?? root}/${model}:streamGenerateContent?alt=sse`, {
+        async (requestSignal) => {
+          try {
+            await options.onRequest?.(measureGeminiRequest(body, round))
+          } catch {
+            throw new RecoveryRequired({
+              kind: 'uncertain',
+              message:
+                'Request measurements could not be saved locally. No provider request was sent; inspect the writable session storage before resuming.',
+            })
+          }
+          return fetch(`${options.baseURL ?? root}/${model}:streamGenerateContent?alt=sse`, {
             method: 'POST',
             redirect: 'error',
             signal: AbortSignal.any([requestSignal, AbortSignal.timeout(120000)]),
             headers: { 'Content-Type': 'application/json', 'x-goog-api-key': options.apiKey },
-            body: JSON.stringify({
-              contents,
-              systemInstruction: {
-                parts: [
-                  {
-                    text:
-                      c?.state.instructions ??
-                      options.instructions ??
-                      'Use the supplied tools to complete the user task.',
-                  },
-                ],
-              },
-              tools: [{ functionDeclarations: declarations }],
-              toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
-              generationConfig: { candidateCount: 1, maxOutputTokens: 8192 },
-            }),
-          }),
+            body,
+          })
+        },
         options.signal,
         c,
       )

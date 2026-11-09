@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile, realpath, mkdir, writeFile, rm, readdir } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { command, git } from './process.ts'
+import { command, git, type CommandResult } from './process.ts'
 import { captureSnapshot, inside, type Snapshot } from './worktrees.ts'
 import type { CodingRepo, FileChange } from '../shared/coding.ts'
 
@@ -68,6 +68,19 @@ export async function loadTree(dir: string): Promise<Map<string, Buffer>> {
   await walk(dir)
   return files
 }
+export function checkedDiffOutput(result: CommandResult, changedFiles: number) {
+  const source = result.stdout ?? result.output
+  if (
+    result.exitCode > 1 ||
+    /(^|\n)(?:error|fatal):/i.test(result.stderr ?? '') ||
+    (changedFiles > 0 && !source.trim()) ||
+    source.length >= 149_000
+  )
+    throw new Error(
+      `Diff failed, returned no patch for changed files, or exceeded the 150 KB review limit.${result.stderr ? ` ${result.stderr.trim().slice(0, 3000)}` : ''}`,
+    )
+  return source
+}
 export async function diffSnapshot(baseline: Map<string, Buffer>, current: Snapshot, dir: string) {
   const files: FileChange[] = []
   for (const path of [...new Set([...baseline.keys(), ...current.files.keys()])].sort()) {
@@ -83,6 +96,7 @@ export async function diffSnapshot(baseline: Map<string, Buffer>, current: Snaps
   const result = await command(dir, 'git', [
     '-c',
     'core.quotePath=false',
+    ...(process.platform === 'win32' ? ['-c', 'core.longpaths=true'] : []),
     'diff',
     '--no-index',
     '--no-ext-diff',
@@ -92,9 +106,7 @@ export async function diffSnapshot(baseline: Map<string, Buffer>, current: Snaps
     'before',
     'after',
   ])
-  const source = result.stdout ?? result.output
-  if (result.exitCode > 1 || source.length >= 149_000)
-    throw new Error('Diff failed or exceeded the 150 KB review limit.')
+  const source = checkedDiffOutput(result, files.length)
   let header = true
   const patch = source
     .split('\n')

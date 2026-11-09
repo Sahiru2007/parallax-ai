@@ -2,6 +2,47 @@ import type { ProviderId, RecoveryInfo } from '../shared/providers.ts'
 import { RecoveryRequired, type Continuation } from './continuation.ts'
 
 export const retryBounds = { maxRetries: 2, maxWaitMs: 60000 }
+function retryDelay(response: Response, details: Record<string, unknown>[]) {
+  let retryAfterMs: number | undefined
+  const header = response.headers.get('retry-after')
+  if (header) {
+    const seconds = Number(header)
+    const value =
+      Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : Date.parse(header) - Date.now()
+    if (Number.isFinite(value) && value >= 0) retryAfterMs = value
+  }
+  for (const detail of details) {
+    if (
+      String(detail['@type']).endsWith('/google.rpc.RetryInfo') &&
+      typeof detail.retryDelay === 'string' &&
+      /^\d+(\.\d+)?s$/.test(detail.retryDelay)
+    ) {
+      const value = parseFloat(detail.retryDelay) * 1000
+      if (Number.isFinite(value)) retryAfterMs = Math.max(retryAfterMs ?? 0, value)
+    }
+  }
+  return {
+    retryAfterMs,
+    retryAt: retryAfterMs === undefined ? undefined : Date.now() + retryAfterMs,
+  }
+}
+export async function serviceUnavailableInfo(
+  provider: ProviderId,
+  response: Response,
+): Promise<RecoveryInfo> {
+  let details: Record<string, unknown>[] = []
+  try {
+    const payload = await response.json()
+    if (Array.isArray(payload.error?.details)) details = payload.error.details
+  } catch {
+    /* Non-JSON errors can still provide Retry-After guidance. */
+  }
+  return {
+    kind: 'unavailable',
+    message: `${provider} is temporarily unavailable (HTTP 503). Retry preserves the same model, worktree and completed tools.`,
+    ...retryDelay(response, details),
+  }
+}
 export async function rateLimitInfo(
   provider: ProviderId,
   response: Response,
@@ -31,21 +72,8 @@ export async function rateLimitInfo(
     ) ||
     /perday|per_day|permonth|per_month|daily|billing|spend/.test(metrics) ||
     violations.some((v) => v.quotaValue === 0 || v.quotaValue === '0')
-  let retryAfterMs: number | undefined
-  const header = response.headers.get('retry-after')
-  if (header) {
-    const seconds = Number(header)
-    const value =
-      Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : Date.parse(header) - Date.now()
-    if (Number.isFinite(value) && value >= 0) retryAfterMs = value
-  }
-  for (const d of details)
-    if (
-      String(d['@type']).endsWith('/google.rpc.RetryInfo') &&
-      typeof d.retryDelay === 'string' &&
-      /^\d+(\.\d+)?s$/.test(d.retryDelay)
-    )
-      retryAfterMs = Math.max(retryAfterMs ?? 0, parseFloat(d.retryDelay) * 1000)
+  const guidance = retryDelay(response, details)
+  const { retryAfterMs } = guidance
   const temporary =
     !exhausted &&
     (/rate_limit|too_many_requests|slow_down/.test(codes) ||
@@ -58,8 +86,7 @@ export async function rateLimitInfo(
       : temporary
         ? `${provider} temporarily rate limited this request (HTTP 429).`
         : `${provider} returned HTTP 429 without enough information to distinguish a temporary rate limit from exhausted quota. Inspect provider usage before resuming.`,
-    retryAfterMs,
-    retryAt: retryAfterMs === undefined ? undefined : Date.now() + retryAfterMs,
+    ...guidance,
   }
 }
 async function wait(ms: number, signal: AbortSignal) {
@@ -123,9 +150,23 @@ export async function providerRequest(
         await c.save()
       }
     }
-    if (response.status !== 429) return response
+    if (response.status !== 429 && response.status !== 503) {
+      if (retrying && lastInfo && response.ok) {
+        c?.onRecovery?.({
+          ...lastInfo,
+          waiting: false,
+          retryAt: undefined,
+          message: `${provider} recovered after a bounded retry. Continuing with the retained context and completed tools.`,
+        })
+        await c?.save()
+      }
+      return response
+    }
     const reading = Date.now()
-    const info = await rateLimitInfo(provider, response)
+    const info =
+      response.status === 503
+        ? await serviceUnavailableInfo(provider, response)
+        : await rateLimitInfo(provider, response)
     if (retrying && c) {
       const elapsed = Date.now() - reading
       c.state.retry.allowanceWaitMs += elapsed
@@ -140,19 +181,28 @@ export async function providerRequest(
     )
     retry.notBefore = info.retryAt
     if (
-      info.kind !== 'rate-limit' ||
+      !['rate-limit', 'unavailable'].includes(info.kind) ||
       retry.attempts >= retryBounds.maxRetries ||
       retry.allowanceWaitMs + delay > retryBounds.maxWaitMs
     ) {
-      c.onRecovery?.({
+      const stopped = {
         ...info,
+        message: !['rate-limit', 'unavailable'].includes(info.kind)
+          ? info.message
+          : info.message +
+            (retry.attempts >= retryBounds.maxRetries
+              ? ` Automatic retry limit (${retryBounds.maxRetries}) reached; resume explicitly later.`
+              : ' The reported delay or remaining waiting budget exceeds the bounded retry window; resume explicitly later.'),
+      }
+      c.onRecovery?.({
+        ...stopped,
         waiting: false,
         maxRetries: retryBounds.maxRetries,
         maxWaitMs: retryBounds.maxWaitMs,
       })
       await c.save()
       throw new RecoveryRequired({
-        ...info,
+        ...stopped,
         maxRetries: retryBounds.maxRetries,
         maxWaitMs: retryBounds.maxWaitMs,
       })

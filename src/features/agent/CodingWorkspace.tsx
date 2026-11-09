@@ -656,7 +656,10 @@ export default function CodingWorkspace() {
                     .filter((m) => m.role === 'assistant')
                     .map((message, index) => (
                       <p className="coding-message" key={index}>
-                        Turn {message.turn}: {message.content}
+                        Turn {message.turn}
+                        {message.candidate &&
+                          ` · ${session.candidates.find((c) => c.id === message.candidate)?.name ?? message.candidate}`}
+                        : {message.content}
                       </p>
                     ))}
                 </div>
@@ -888,6 +891,14 @@ export default function CodingWorkspace() {
                               {'\n'}
                               {check.output}
                             </pre>
+                            {check.fullOutput && (
+                              <a
+                                href={`/api/coding/sessions/${session.id}/checks/${check.id}/output`}
+                                download
+                              >
+                                Download complete output
+                              </a>
+                            )}
                           </details>
                         ))}
                       {!session.checks.length && <p>No project checks have executed.</p>}

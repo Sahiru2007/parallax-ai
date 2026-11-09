@@ -12,6 +12,18 @@ export interface AgentProgress {
   onRound?: (round: number, limit: number) => void
   onUsage?: (usage: TokenUsage) => void
   onDelta?: (text: string) => void
+  onRequest?: (size: RequestSize) => void
+}
+export interface RequestSize {
+  round: number
+  bytes: number
+  systemBytes: number
+  schemaBytes: number
+  modelBytes: number
+  userBytes: number
+  toolBytes: { files: number; search: number; commands: number; other: number }
+  toolResponses: number
+  messages: number
 }
 export interface ModelSelection {
   provider: ProviderId
@@ -39,6 +51,7 @@ export interface ProviderRun extends ModelSelection {
   resumable?: boolean
   legacyRecovery?: boolean
   checkpointed?: boolean
+  requestSizes?: RequestSize[]
   calls?: {
     id: string
     name: string
@@ -52,6 +65,7 @@ export interface RecoveryInfo {
   at?: string
   kind:
     | 'rate-limit'
+    | 'unavailable'
     | 'quota'
     | 'unknown-429'
     | 'limit'

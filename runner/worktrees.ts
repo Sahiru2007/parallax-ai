@@ -19,14 +19,14 @@ export function inside(root: string, file: string) {
   }
   return target
 }
-export async function safeRead(root: string, file: string) {
+export async function safeRead(root: string, file: string, maxBytes = 200_000) {
   const path = inside(root, file)
   const actual = await realpath(path)
   const rel = relative(root, actual)
   if (rel.startsWith('..') || isAbsolute(rel))
     throw new Error('Symlink access outside the worktree is not permitted.')
   const data = await readFile(path)
-  if (data.length > 200_000) throw new Error('File exceeds the agent read limit.')
+  if (data.length > maxBytes) throw new Error('File exceeds the agent read limit.')
   return data.toString('utf8')
 }
 export interface Snapshot {

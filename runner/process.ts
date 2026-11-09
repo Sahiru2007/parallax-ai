@@ -127,7 +127,8 @@ export async function command(
   })
 }
 export async function git(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
-  const result = await command(cwd, 'git', args, signal)
+  const argv = process.platform === 'win32' ? ['-c', 'core.longpaths=true', ...args] : args
+  const result = await command(cwd, 'git', argv, signal)
   if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${result.output}`)
   return (result.stdout ?? result.output).trimEnd()
 }

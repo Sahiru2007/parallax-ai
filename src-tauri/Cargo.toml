@@ -1,6 +1,6 @@
 [package]
 name = "parallax-ai"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 description = "PARALLAX AI Development Multiverse - Phase 1 foundation"
 edition = "2024"
 rust-version = "1.90"

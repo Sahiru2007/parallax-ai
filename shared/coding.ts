@@ -25,6 +25,9 @@ export interface CodingCheck {
   status: 'passed' | 'failed' | 'skipped' | 'running'
   output: string
   exitCode?: number
+  outputChars?: number
+  fullOutput?: boolean
+  modelSummary?: { testStats?: unknown; highlights: string[] }
 }
 export interface CodingCandidate {
   id: string
@@ -58,7 +61,7 @@ export interface CodingSession {
   busy: boolean
   turn: number
   createdAt: string
-  messages: { role: 'user' | 'assistant'; content: string; turn: number }[]
+  messages: { role: 'user' | 'assistant'; content: string; turn: number; candidate?: string }[]
   events: ToolEvent[]
   checks: CodingCheck[]
   candidates: CodingCandidate[]

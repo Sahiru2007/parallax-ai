@@ -23,11 +23,14 @@ export interface ToolReceipt extends PendingCall {
   processId?: number
   inspected?: string
   reusedFrom?: string
+  expectedFileDigest?: string
   approvalHistory?: NonNullable<ToolReceipt['approval']>[]
 }
 // Runner-private: includes provider-native context/signatures, never returned by session APIs.
 export interface AgentCheckpoint {
   version: 1
+  candidate?: string
+  contextIsolationVersion?: 1
   context?: unknown[]
   instructions?: string
   recoveryNote?: string

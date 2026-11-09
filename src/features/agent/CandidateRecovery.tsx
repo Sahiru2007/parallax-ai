@@ -115,6 +115,12 @@ export function CandidateRecovery({
             {run.requests ?? run.rounds ?? 0} · Automatic retries {run.autoRetries ?? 0} · Waited{' '}
             {Math.ceil((run.waitedMs ?? 0) / 1000)}s total
           </p>
+          {run.requestSizes?.length ? (
+            <p data-testid="model-request-size">
+              Last model request: {(run.requestSizes.at(-1)!.bytes / 1024).toFixed(1)} KB ·{' '}
+              {run.requestSizes.length} measured requests
+            </p>
+          ) : null}
           {run.recovery && (
             <p role="status">
               {run.recovery.message}{' '}
