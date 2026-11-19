@@ -1,4 +1,6 @@
-﻿# Windows desktop release
+# Windows desktop release
+
+**Current download:** [0.1.0-alpha.3 for Windows x64](https://github.com/Sahiru2007/parallax-ai/releases/tag/v0.1.0-alpha.3). See [its release notes](releases/v0.1.0-alpha.3.md) for current build verification. The detailed installed-app acceptance below is the retained alpha.1 record; alpha.2 repairs are documented [separately](benchmark-repair-verification.md).
 
 PARALLAX AI uses one packaging path: **Tauri 2 with a per-user NSIS installer**. This keeps the existing React frontend and TypeScript runner, uses the standard Tauri installer/update layout, and avoids a second packaging system. The choice follows the official [Windows installer](https://v2.tauri.app/distribute/windows-installer/) and [resource bundling](https://v2.tauri.app/develop/resources/) guidance.
 
@@ -15,7 +17,7 @@ npm run desktop:build
 The build runs the frontend production build, stages the desktop resources, compiles the native shell, and creates:
 
 ```text
-E:\projects\parallax-ai\src-tauri\target\release\bundle\nsis\PARALLAX AI_0.1.0-alpha.1_x64-setup.exe
+src-tauri/target/release/bundle/nsis/PARALLAX AI_0.1.0-alpha.3_x64-setup.exe
 ```
 
 Build prerequisites are Node/npm, Rust with the MSVC target, Microsoft C++ Build Tools, and a Windows SDK. This machine already had Node **24.22.1**, Rust/Cargo **1.99.1**, Visual Studio 2022 MSVC **14.41.34120**, Windows SDK **10.0.22621.0**, and WebView2. No compiler/toolchain reinstall was needed. Allow several GB for the build resources and Rust caches. First preparation downloads Node/MinGit and Tauri downloads its installer tooling; later builds reuse the caches.
@@ -37,7 +39,7 @@ Build prerequisites are Node/npm, Rust with the MSVC target, Microsoft C++ Build
 
 Development browser data remains in its existing location and is not automatically migrated into the separate desktop profile. Existing Windows Credential Manager keys are reused. This avoids simultaneous development and installed runners writing the same sessions.
 
-## Verification
+## Historical installed-app verification (alpha.1)
 
 Tests used **this development PC: Windows 11 Pro, x64, build 26300**. This was **not a clean Windows VM**. VS Code stayed open at the user's request because it hosts the Codex session. PARALLAX's Vite development server and development runner were stopped; installed acceptance also deliberately occupied port 1420 and launched with a system-only PATH before the native app prepended its bundled tools. Replay target servers were started by the installed runner itself.
 
@@ -57,4 +59,4 @@ Default/silent uninstall removes the program and its shortcuts while **retaining
 
 The installer is **unsigned**; no signing certificate was configured. SmartScreen/reputation on a downloaded installer, first-time offline WebView2 provisioning, and execution on a clean Windows environment remain unverified. VS Code-fully-closed execution was not directly exercised; the separate Start-menu launch, installed resource paths, private port, and bundled-tool tests verify independence from the development servers and checkout. Browser development remains available with `npm run dev`.
 
-Generated installers, bundled runtimes, and verification artifacts remain local and are excluded from Git.
+Generated installers, bundled runtimes, and verification artifacts are excluded from Git. Published installers and checksums are distributed through [GitHub Releases](https://github.com/Sahiru2007/parallax-ai/releases), rather than committed as repository files.

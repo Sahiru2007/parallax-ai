@@ -1,0 +1,49 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1280"
+  height="300"
+  viewBox="0 0 1280 300"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">PARALLAX AI</title>
+  <desc id="description">
+    Your local coding desk. Edit. Verify. Replay. Graphite and citron with the overlapping Parallax
+    frames.
+  </desc>
+  <rect width="1280" height="300" rx="8" fill="#242629" />
+  <path d="M48 47h1184M48 253h1184" stroke="#44474a" />
+  <path d="M70 105l79-27v101l-79 27z" fill="none" stroke="#d4d6d4" stroke-width="2" />
+  <path
+    d="M105 115l79-27v101l-79 27z"
+    fill="#242629"
+    fill-opacity=".65"
+    stroke="#d1df78"
+    stroke-width="2"
+  />
+  <g font-family="'Arial Narrow',Arial,sans-serif">
+    <text x="224" y="146" fill="#e0e1dc" font-size="62" font-weight="500" letter-spacing="5">
+      PARALLAX
+      <tspan fill="#d1df78">AI</tspan>
+    </text>
+    <text x="228" y="189" fill="#bec2bd" font-size="23">
+      Your local coding desk. Changes you can inspect.
+    </text>
+  </g>
+  <g font-family="monospace" font-size="12" fill="#b3b7b1" letter-spacing="2">
+    <text x="49" y="31">LOCAL WORKTREES / CHOSEN MODELS / REAL EVIDENCE</text>
+    <text x="49" y="279" fill="#d1df78">EDIT / VERIFY / REPLAY</text>
+    <text x="1033" y="279">WINDOWS + BROWSER</text>
+  </g>
+  <g fill="none" stroke="#44474a">
+    <path
+      d="M930 85v130M978 85v130M1026 85v130M1074 85v130M1122 85v130M1170 85v130M930 122h240M930 164h240M930 206h240"
+    />
+    <path
+      d="M930 105h70v29h-70zM1026 147h94v29h-94zM1095 189h75v29h-75z"
+      fill="#30342b"
+      stroke="#70784f"
+    />
+    <path d="M1147 85v136" stroke="#d1df78" stroke-width="2" />
+  </g>
+</svg>
